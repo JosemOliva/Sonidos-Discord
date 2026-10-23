@@ -154,23 +154,43 @@ def play_preview(path: Path, volume: float = 0.8) -> None:
 
 
 def capture_gamepad_button(timeout: float = 10.0) -> int | None:
-    """Espera a que se pulse cualquier botón de cualquier mando y devuelve su número."""
-    from .triggers.gamepad import init_pygame_joystick
+    """Espera a que se pulse cualquier botón de cualquier mando y devuelve su número.
+
+    Si no se pulsa ningún botón, lanza un error que dice qué mandos ve Windows,
+    para distinguir un mando no reconocido de un botón que no cuenta como tal.
+    """
+    from .triggers import xinput
+    from .triggers.gamepad import buttons_down, init_pygame_joystick
 
     pygame = init_pygame_joystick()
     deadline = time.monotonic() + timeout
+    sticks: list = []
     try:
         while time.monotonic() < deadline:
             pygame.event.pump()
-            for i in range(pygame.joystick.get_count()):
-                stick = pygame.joystick.Joystick(i)
-                for b in range(stick.get_numbuttons()):
-                    if stick.get_button(b):
-                        return b
+            if pygame.joystick.get_count() != len(sticks):
+                sticks = [pygame.joystick.Joystick(i) for i in range(pygame.joystick.get_count())]
+            down = buttons_down(sticks)
+            if down:
+                return min(down)
             time.sleep(0.01)
+        found = [(s.get_name(), s.get_numbuttons()) for s in sticks]
+        if not found and xinput.connected_pads():
+            found = [("Mando XInput", len(xinput.BUTTON_BITS))]
+        raise RuntimeError(describe_no_button(found))
     finally:
         pygame.joystick.quit()
-    return None
+
+
+def describe_no_button(sticks: list[tuple[str, int]]) -> str:
+    """Mensaje para cuando no se detecta un botón. ``sticks``: (nombre, número de botones)."""
+    if not sticks:
+        return ("Windows no muestra ningún mando conectado.\n"
+                "Revisa el cable o el receptor y el modo del mando (debe estar en modo PC / X-input).")
+    names = "\n".join(f"• {name} ({buttons} botones)" for name, buttons in sticks)
+    return (f"Mandos detectados:\n{names}\n\n"
+            "Pulsa un botón normal (A, B, X, Y, LB, RB, Start...). "
+            "La cruceta y los gatillos LT/RT todavía no se pueden usar.")
 
 
 def download_vosk_model(dest_dir: Path | None = None, progress=None) -> Path:

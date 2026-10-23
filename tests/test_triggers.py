@@ -185,3 +185,26 @@ def test_gamepad_trigger_fires_once_per_press(monkeypatch):
     time.sleep(0.05)
     asyncio.run(t.stop())
     assert rec.fired == ["manda mas", "chiqui tapia"]
+
+
+def test_xinput_buttons_from_mask():
+    from sonidos_bot.triggers.xinput import buttons_from_mask
+
+    assert buttons_from_mask(0) == set()
+    assert buttons_from_mask(0x1000) == {0}  # A
+    assert buttons_from_mask(0x0010 | 0x0200) == {5, 7}  # RB + Start
+
+
+def test_gamepad_prefers_xinput_numbering(monkeypatch):
+    monkeypatch.setattr(gamepad_mod.xinput, "pressed_buttons", lambda: {0})
+
+    class Stick:
+        def get_numbuttons(self):
+            return 3
+
+        def get_button(self, i):
+            return i == 2  # el mismo botón con otra numeración
+
+    assert gamepad_mod.buttons_down([Stick()]) == {0}
+    monkeypatch.setattr(gamepad_mod.xinput, "pressed_buttons", set)
+    assert gamepad_mod.buttons_down([Stick()]) == {2}

@@ -5,6 +5,7 @@ import pytest
 from sonidos_bot.config import ConfigError
 from sonidos_bot.wizard_helpers import (
     binding_from_form,
+    describe_no_button,
     known_sounds,
     parse_discord_id,
     parse_keywords,
@@ -69,3 +70,13 @@ def test_find_cached_sound(tmp_path):
     (tmp_path / "index.json").write_text(json.dumps([{"key": "chiqui tapia", "file": "55.mp3", "filename": "Chiqui Tapia.mp3"}]))
     assert find_cached_sound(tmp_path, "chiqui_tapia.mp3") == tmp_path / "55.mp3"
     assert find_cached_sound(tmp_path, "uruguayo.mp3") is None
+
+
+def test_describe_no_button_sin_mandos():
+    assert "ningún mando" in describe_no_button([])
+
+
+def test_describe_no_button_con_mando():
+    msg = describe_no_button([("Xbox 360 Controller", 11)])
+    assert "Xbox 360 Controller (11 botones)" in msg
+    assert "cruceta" in msg
