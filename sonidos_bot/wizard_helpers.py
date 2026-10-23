@@ -159,7 +159,8 @@ def capture_gamepad_button(timeout: float = 10.0) -> int | None:
     Si no se pulsa ningún botón, lanza un error que dice qué mandos ve Windows,
     para distinguir un mando no reconocido de un botón que no cuenta como tal.
     """
-    from .triggers.gamepad import init_pygame_joystick
+    from .triggers import xinput
+    from .triggers.gamepad import buttons_down, init_pygame_joystick
 
     pygame = init_pygame_joystick()
     deadline = time.monotonic() + timeout
@@ -169,13 +170,14 @@ def capture_gamepad_button(timeout: float = 10.0) -> int | None:
             pygame.event.pump()
             if pygame.joystick.get_count() != len(sticks):
                 sticks = [pygame.joystick.Joystick(i) for i in range(pygame.joystick.get_count())]
-            for stick in sticks:
-                for b in range(stick.get_numbuttons()):
-                    if stick.get_button(b):
-                        return b
+            down = buttons_down(sticks)
+            if down:
+                return min(down)
             time.sleep(0.01)
-        raise RuntimeError(describe_no_button(
-            [(s.get_name(), s.get_numbuttons()) for s in sticks]))
+        found = [(s.get_name(), s.get_numbuttons()) for s in sticks]
+        if not found and xinput.connected_pads():
+            found = [("Mando XInput", len(xinput.BUTTON_BITS))]
+        raise RuntimeError(describe_no_button(found))
     finally:
         pygame.joystick.quit()
 
