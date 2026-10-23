@@ -1,0 +1,7 @@
+discord.py[voice]>=2.4,<3   # cliente de Discord + soporte de voz (PyNaCl)
+pynput>=1.7                 # atajos de teclado globales
+pygame>=2.5                 # lectura de mandos/joysticks
+vosk>=0.3.45                # reconocimiento de voz offline (modo voice_keyword)
+discord-ext-voice-recv==0.5.2a179  # recepción de audio del canal (modo voice_keyword; solo hay versiones pre-release)
+numpy>=1.26                 # conversión de audio para el modo voice_keyword
+customtkinter>=5.2              # menú de configuración con tema oscuro

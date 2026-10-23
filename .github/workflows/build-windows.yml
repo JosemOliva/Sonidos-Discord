@@ -1,0 +1,27 @@
+# Compila el instalador de Windows en cada push y lo deja como artefacto
+# descargable en la pestaña Actions de GitHub.
+name: Instalador Windows
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Instalar Inno Setup
+        run: choco install innosetup --no-progress -y
+      - name: Compilar
+        shell: pwsh
+        run: |
+          python -m venv .venv
+          ./installer/build.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SonidosBot-Setup
+          path: dist/SonidosBot-Setup-*.exe
