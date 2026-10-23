@@ -91,14 +91,22 @@ class SoundBot(discord.Client):
         return guild
 
     async def _sync_library(self) -> None:
-        channel = self._guild().get_channel(self.config.discord.sounds_channel_id)
-        if not isinstance(channel, discord.TextChannel):
-            log.error("sounds_channel_id no es un canal de texto del servidor")
-            return
+        guild = self._guild()
+        channel = None
+        if self.config.discord.sounds_channel_id:
+            channel = guild.get_channel(self.config.discord.sounds_channel_id)
+            if not isinstance(channel, (discord.TextChannel, discord.VoiceChannel)):
+                log.error("sounds_channel_id no es un canal de texto del servidor, solo uso el panel de sonidos")
+                channel = None
         try:
-            await self.library.sync(channel)
+            soundboard = await guild.fetch_soundboard_sounds()
         except discord.DiscordException as exc:
-            log.error("No se pudo leer el canal de sonidos, uso la caché local: %s", exc)
+            log.warning("No se pudo leer el panel de sonidos del servidor: %s", exc)
+            soundboard = list(guild.soundboard_sounds)
+        try:
+            await self.library.sync(channel, soundboard)
+        except discord.DiscordException as exc:
+            log.error("No se pudieron descargar los sonidos, uso la caché local: %s", exc)
 
     async def _join_voice(self) -> None:
         channel = self._guild().get_channel(self.config.discord.voice_channel_id)
@@ -154,6 +162,20 @@ class SoundBot(discord.Client):
             if isinstance(trigger, TextKeywordTrigger):
                 trigger.handle_message(message.content)
 
+    async def on_soundboard_sound_create(self, sound) -> None:
+        await self._soundboard_changed(sound)
+
+    async def on_soundboard_sound_update(self, before, after) -> None:
+        await self._soundboard_changed(after)
+
+    async def on_soundboard_sound_delete(self, sound) -> None:
+        await self._soundboard_changed(sound)
+
+    async def _soundboard_changed(self, sound) -> None:
+        if sound.guild is not None and sound.guild.id == self.config.discord.guild_id:
+            log.info("Cambió el panel de sonidos (%s), vuelvo a sincronizar", sound.name)
+            await self._sync_library()
+
     async def on_voice_state_update(self, member, before, after) -> None:
         if member.id != self.user.id or after.channel is not None:
             return
@@ -198,7 +220,7 @@ class SoundBot(discord.Client):
         if new.discord.sounds_channel_id != old.discord.sounds_channel_id:
             await self._sync_library()
         for missing in self.library.missing_bindings():
-            log.warning("El sonido '%s' está en el config pero no en el canal de Discord", missing)
+            log.warning("El sonido '%s' está en el config pero no en Discord", missing)
 
         new_cls = voice_client_class(new)
         if new.discord.voice_channel_id != old.discord.voice_channel_id or new_cls is not self.player.voice_client_cls:

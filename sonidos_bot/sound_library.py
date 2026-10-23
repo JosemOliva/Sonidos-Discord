@@ -1,7 +1,11 @@
-"""Biblioteca de sonidos: descarga los audios del canal de Discord y los cachea.
+"""Biblioteca de sonidos: descarga los audios de Discord y los cachea.
 
-Los adjuntos de audio del canal ``sounds_channel_id`` se guardan en
-``config.cache_dir``. Cada sonido se identifica por su nombre de archivo sin
+Los sonidos salen de dos sitios: el panel de sonidos (soundboard) del
+servidor y, si está configurado, los adjuntos de audio del canal
+``sounds_channel_id``. Todo se guarda en ``config.cache_dir``. Un sonido del
+panel se llama como en Discord (``El Manda Mas`` -> ``el manda mas``); si
+coincide con un adjunto del canal, gana el adjunto.
+ Cada adjunto se identifica por su nombre de archivo sin
 extensión, normalizado (``Chiqui Tapia.mp3`` -> ``chiqui tapia``). Si el mismo
 nombre aparece varias veces en el canal, gana el mensaje más reciente, así que
 para cambiar un sonido basta con volver a subirlo con el mismo nombre.
@@ -18,9 +22,8 @@ import logging
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from .config import Config, sound_key
+from .config import AUDIO_EXTENSIONS, Config, sound_key
 
-AUDIO_EXTENSIONS = {".mp3", ".wav", ".ogg", ".m4a", ".flac", ".opus", ".webm"}
 INDEX_FILENAME = "index.json"
 
 log = logging.getLogger("sonidos_bot.library")
@@ -37,6 +40,25 @@ class CachedSound:
 def is_audio(attachment) -> bool:
     content_type = (getattr(attachment, "content_type", None) or "").lower()
     return content_type.startswith("audio/") or Path(attachment.filename).suffix.lower() in AUDIO_EXTENSIONS
+
+
+class SoundboardItem:
+    """Envuelve un sonido del panel para descargarlo igual que un adjunto."""
+
+    def __init__(self, sound):
+        self.id = sound.id
+        self.filename = sound.name
+        self._sound = sound
+
+    async def save(self, path: Path) -> None:
+        data = await self._sound.read()
+        path.write_bytes(data)
+
+    @staticmethod
+    def suffix() -> str:
+        # Discord guarda los sonidos del panel en MP3 u OGG; FFmpeg y pygame
+        # reconocen el formato por el contenido, la extensión da igual.
+        return ".audio"
 
 
 class SoundLibrary:
@@ -58,7 +80,7 @@ class SoundLibrary:
         return sorted(self._entries)
 
     def missing_bindings(self) -> list[str]:
-        """Sonidos del config que no están en el canal."""
+        """Sonidos del config que no están en Discord."""
         return [b.sound for b in self.config.bindings if b.sound_key not in self._entries]
 
     # -- índice local -------------------------------------------------------
@@ -86,16 +108,19 @@ class SoundLibrary:
 
     # -- sincronización con Discord ----------------------------------------
 
-    async def sync(self, channel) -> None:
-        """Recorre el canal entero y deja la caché igual a lo que hay en él."""
+    async def sync(self, channel=None, soundboard=()) -> None:
+        """Deja la caché igual a lo que hay en el panel de sonidos y en el canal."""
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         found: dict[str, object] = {}
-        async for message in channel.history(limit=None, oldest_first=False):
-            for attachment in message.attachments:
-                if not is_audio(attachment):
-                    continue
-                key = sound_key(attachment.filename)
-                found.setdefault(key, attachment)  # el más reciente primero
+        if channel is not None:
+            async for message in channel.history(limit=None, oldest_first=False):
+                for attachment in message.attachments:
+                    if not is_audio(attachment):
+                        continue
+                    key = sound_key(attachment.filename)
+                    found.setdefault(key, attachment)  # el más reciente primero
+        for sound in soundboard:
+            found.setdefault(sound_key(sound.name), SoundboardItem(sound))
 
         new_entries: dict[str, CachedSound] = {}
         for key, attachment in found.items():
@@ -109,7 +134,7 @@ class SoundLibrary:
         self._save_index()
         log.info("Biblioteca sincronizada: %d sonidos (%s)", len(self._entries), ", ".join(self.names()))
         for missing in self.missing_bindings():
-            log.warning("El sonido '%s' está en el config pero no en el canal de Discord", missing)
+            log.warning("El sonido '%s' está en el config pero no en Discord", missing)
 
     async def add_from_message(self, message) -> list[str]:
         """Agrega los audios de un mensaje nuevo del canal. Devuelve las claves añadidas."""
@@ -128,7 +153,10 @@ class SoundLibrary:
         return added
 
     async def _ensure_downloaded(self, key: str, attachment) -> CachedSound:
-        suffix = Path(attachment.filename).suffix.lower() or ".audio"
+        if isinstance(attachment, SoundboardItem):
+            suffix = attachment.suffix()
+        else:
+            suffix = Path(attachment.filename).suffix.lower() or ".audio"
         file = f"{attachment.id}{suffix}"
         path = self.cache_dir / file
         current = self._entries.get(key)
