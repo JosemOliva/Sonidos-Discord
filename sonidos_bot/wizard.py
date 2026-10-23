@@ -597,7 +597,7 @@ class BindingDialog(ctk.CTkToplevel):
         self.button_btn.configure(state="normal")
         if error or value is None:
             self._set_button(self.button_value)
-            messagebox.showwarning("Mando", f"No se detectó ningún botón.\n{error or 'Conecta el mando y vuelve a probar.'}",
+            messagebox.showwarning("Mando", f"No se detectó ningún botón.\n\n{error or 'Conecta el mando y vuelve a probar.'}",
                                    parent=self)
             return
         self._set_button(value)
