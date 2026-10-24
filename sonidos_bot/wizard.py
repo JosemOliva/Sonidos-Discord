@@ -312,7 +312,9 @@ class Wizard(ctk.CTk):
         if folder:
             self.model_path.set(folder)
 
-    def _download_model(self) -> None:
+    def _download_model(self, then=None) -> None:
+        """Descarga el modelo de voz; ``then`` se llama al terminar bien."""
+        self._after_download = then
         self.download_btn.configure(state="disabled", text="Descargando…")
         progress = lambda fraction: self.call_in_ui(self.download_progress.set, fraction)
         done = lambda path, error: self.call_in_ui(self._download_finished, path, error)
@@ -325,6 +327,9 @@ class Wizard(ctk.CTk):
             return
         self.download_progress.set(1)
         self.model_path.set(str(path))
+        then, self._after_download = getattr(self, "_after_download", None), None
+        if then is not None:
+            then()
 
     # -- Sonidos ------------------------------------------------------------
 
@@ -487,6 +492,12 @@ class Wizard(ctk.CTk):
         return config
 
     def save(self, start: bool = False) -> None:
+        if self.modes["voice_keyword"].get() and not self.model_path.get().strip():
+            if messagebox.askyesno("Modelo de voz", "Palabra por voz necesita el modelo de voz en español (~40 MB).\n\n"
+                                                    "¿Lo descargo ahora y guardo al terminar?"):
+                self.show_page("modos")
+                self._download_model(then=lambda: self.save(start))
+            return
         try:
             config = self.build_config()
         except ConfigError as exc:
