@@ -1,4 +1,4 @@
-# Estado del proyecto Sonidos Bot (21/10/2026)
+# Estado del proyecto Sonidos Bot (23/10/2026)
 
 ## Hecho
 
@@ -31,17 +31,19 @@
 - [x] Script `installer\build.ps1` y compilación automática en GitHub Actions
 - [x] 39 tests automáticos que pasan
 
+## 23/10/2026
+- [x] Código subido a GitHub (JosemOliva/Sonidos-Discord) y el instalador compila en Actions
+- [x] Bot creado en el portal de Discord, IDs copiados e instalador probado en la PC de Jose
+- [x] PR #1: el mando Redragon Harrow Pro (Windows lo ve como Xbox 360) no se detectaba; ahora se lee también por XInput
+- [x] PR #2: el bot usa los sonidos del **panel de sonidos** del servidor; el canal de audios pasa a ser opcional
+
 ## Pendiente para la próxima sesión
-
-### Lo que tienes que hacer tú
-1. **Crear el repositorio en GitHub** y conectarlo, para subir el código. Así GitHub compila el instalador `.exe` solo.
-2. **Crear el bot en el portal de Discord**: copiar el token, activar "Message Content Intent" e invitarlo al servidor (los pasos están en el README).
-3. **Subir los 3 audios al canal de sonidos**: `chiqui_tapia.mp3`, `manda_mas.mp3` y `uruguayo.mp3`, o ajustar los nombres en el menú.
-4. **Pasar los IDs** del servidor, del canal de voz y del canal de audios (o cargarlos directamente en el menú).
-
-### Lo que haremos juntos
-5. **Generar el instalador `.exe`** en GitHub Actions y revisar que compile sin errores.
-6. **Prueba real en tu PC con Windows**: instalar, configurar y probar cada modo (texto, voz, teclado y mando).
-7. **Verificar la palabra por voz**. Es el mayor riesgo: Discord ahora cifra el audio de voz, y la librería que lo recibe podría no soportarlo todavía. Si falla, el plan B es escuchar el micrófono de tu PC, aunque así solo se detectaría tu voz.
-8. **Ajustar el reconocimiento** si Vosk entiende mal "Chiqui Tapia" (por ejemplo, añadiendo variantes de la palabra).
-9. **Detalles opcionales**: icono propio para el programa, icono en la bandeja del sistema en lugar de la ventana de consola, y firma del `.exe` para evitar el aviso de Windows SmartScreen.
+1. **Admin del servidor**: aceptar el bot con el enlace de invitación (Jose no es administrador).
+2. **Instalar la compilación #4** (rama `sonidos-soundboard`) y comprobar:
+   - que *Detectar* reconoce los botones del mando;
+   - que el desplegable de Sonidos muestra los del panel ("El chiqui Ackerman", "El Manda Mas"...), con el canal de audios vacío.
+3. Si todo va bien, **fusionar PR #1 y PR #2** en `main`.
+4. **Prueba real** con el bot en el canal de voz: texto, teclado, mando y voz.
+5. **Verificar la palabra por voz** (riesgo: cifrado de voz de Discord; plan B: micrófono de la PC).
+6. **Ajustar el reconocimiento** de Vosk si entiende mal las palabras.
+7. **Opcionales**: icono propio, icono en la bandeja del sistema y firma del `.exe`.

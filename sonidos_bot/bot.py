@@ -1,7 +1,7 @@
 """Cliente de Discord que une configuración, biblioteca, reproductor y disparadores.
 
 Flujo:
-  1. Al conectarse, sincroniza la biblioteca desde el canal de sonidos.
+  1. Al conectarse, sincroniza la biblioteca (panel de sonidos y canal).
   2. Entra al canal de voz configurado (y vuelve a entrar si lo sacan).
   3. Arranca los disparadores de los modos activos.
   4. Cada disparo busca el sonido y lo reproduce.
@@ -9,12 +9,16 @@ Flujo:
 El config se vigila en disco: si se edita (a mano o desde el menú del
 instalador) se recarga sin reiniciar el bot, así se pueden añadir o cambiar
 palabras clave, teclas y sonidos en caliente.
+
+Al cerrar la ventana de la consola en Windows, el bot sale del canal de voz
+antes de terminar; si no, Discord lo deja dentro un buen rato.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 
 import discord
 from discord import app_commands
@@ -29,6 +33,7 @@ from .triggers.text_keyword import TextKeywordTrigger
 log = logging.getLogger("sonidos_bot.bot")
 
 CONFIG_POLL_SECONDS = 5
+CLOSE_TIMEOUT_SECONDS = 4  # Windows mata el proceso unos 5 s después de cerrar la consola
 REJOIN_DELAY_SECONDS = 5
 
 
@@ -53,15 +58,40 @@ class SoundBot(discord.Client):
         self.player = Player(config, voice_client_class(config))
         self.triggers: list[Trigger] = []
         self._ready_once = False
+        self._main_loop: asyncio.AbstractEventLoop | None = None
         self._config_mtime = self._read_config_mtime()
         self._register_commands()
 
     # -- arranque -----------------------------------------------------------
 
     def run(self) -> None:  # type: ignore[override]
+        if sys.platform == "win32":
+            self._install_console_close_handler()
         super().run(self.config.discord.token, log_handler=None)
 
+    def _install_console_close_handler(self) -> None:
+        """Al cerrar la consola (X, Ctrl+C, apagar la PC) sale del canal de voz antes de morir."""
+        import ctypes
+
+        handler_type = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_uint)
+
+        def on_console_event(event: int) -> bool:
+            loop = self._main_loop
+            if loop is None or not loop.is_running():
+                return False
+            log.info("Cerrando: salgo del canal de voz")
+            future = asyncio.run_coroutine_threadsafe(self.close(), loop)
+            try:
+                future.result(timeout=CLOSE_TIMEOUT_SECONDS)
+            except Exception as exc:  # cerramos igual
+                log.warning("No pude cerrar del todo: %s", exc)
+            return True
+
+        self._console_handler = handler_type(on_console_event)  # que no lo borre el recolector
+        ctypes.windll.kernel32.SetConsoleCtrlHandler(self._console_handler, True)
+
     async def setup_hook(self) -> None:
+        self._main_loop = asyncio.get_running_loop()
         guild = discord.Object(id=self.config.discord.guild_id)
         self.tree.copy_global_to(guild=guild)
         await self.tree.sync(guild=guild)
@@ -91,14 +121,22 @@ class SoundBot(discord.Client):
         return guild
 
     async def _sync_library(self) -> None:
-        channel = self._guild().get_channel(self.config.discord.sounds_channel_id)
-        if not isinstance(channel, discord.TextChannel):
-            log.error("sounds_channel_id no es un canal de texto del servidor")
-            return
+        guild = self._guild()
+        channel = None
+        if self.config.discord.sounds_channel_id:
+            channel = guild.get_channel(self.config.discord.sounds_channel_id)
+            if not isinstance(channel, (discord.TextChannel, discord.VoiceChannel)):
+                log.error("sounds_channel_id no es un canal de texto del servidor, solo uso el panel de sonidos")
+                channel = None
         try:
-            await self.library.sync(channel)
+            soundboard = await guild.fetch_soundboard_sounds()
         except discord.DiscordException as exc:
-            log.error("No se pudo leer el canal de sonidos, uso la caché local: %s", exc)
+            log.warning("No se pudo leer el panel de sonidos del servidor: %s", exc)
+            soundboard = list(guild.soundboard_sounds)
+        try:
+            await self.library.sync(channel, soundboard)
+        except discord.DiscordException as exc:
+            log.error("No se pudieron descargar los sonidos, uso la caché local: %s", exc)
 
     async def _join_voice(self) -> None:
         channel = self._guild().get_channel(self.config.discord.voice_channel_id)
@@ -154,6 +192,20 @@ class SoundBot(discord.Client):
             if isinstance(trigger, TextKeywordTrigger):
                 trigger.handle_message(message.content)
 
+    async def on_soundboard_sound_create(self, sound) -> None:
+        await self._soundboard_changed(sound)
+
+    async def on_soundboard_sound_update(self, before, after) -> None:
+        await self._soundboard_changed(after)
+
+    async def on_soundboard_sound_delete(self, sound) -> None:
+        await self._soundboard_changed(sound)
+
+    async def _soundboard_changed(self, sound) -> None:
+        if sound.guild is not None and sound.guild.id == self.config.discord.guild_id:
+            log.info("Cambió el panel de sonidos (%s), vuelvo a sincronizar", sound.name)
+            await self._sync_library()
+
     async def on_voice_state_update(self, member, before, after) -> None:
         if member.id != self.user.id or after.channel is not None:
             return
@@ -198,7 +250,7 @@ class SoundBot(discord.Client):
         if new.discord.sounds_channel_id != old.discord.sounds_channel_id:
             await self._sync_library()
         for missing in self.library.missing_bindings():
-            log.warning("El sonido '%s' está en el config pero no en el canal de Discord", missing)
+            log.warning("El sonido '%s' está en el config pero no en Discord", missing)
 
         new_cls = voice_client_class(new)
         if new.discord.voice_channel_id != old.discord.voice_channel_id or new_cls is not self.player.voice_client_cls:

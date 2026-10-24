@@ -10,8 +10,9 @@ disparar de cuatro formas:
 | `text_keyword` | Alguien escribe la palabra clave en el chat (ej. "Chiqui Tapia") |
 | `voice_keyword` | Alguien dice la palabra clave en el canal de voz (Vosk, offline) |
 
-Los audios se toman de un canal de texto de Discord: el bot descarga los
-adjuntos de ese canal y los guarda en caché local.
+Los audios se toman del panel de sonidos (soundboard) del servidor y,
+opcionalmente, de los adjuntos de un canal de texto. El bot los descarga y
+los guarda en caché local.
 
 ## Estructura
 
@@ -72,14 +73,18 @@ los cambios solo. La configuración se conserva al desinstalar o actualizar.
 2. En **OAuth2 > URL Generator** marca `bot` y `applications.commands`, y los
    permisos *View Channels*, *Send Messages*, *Read Message History*,
    *Connect* y *Speak*. Abre la URL e invita el bot a tu servidor.
-3. Sube los audios al canal de sonidos. El nombre del archivo es el nombre
-   del sonido. Para cambiar un sonido, súbelo de nuevo con el mismo nombre:
-   gana el más reciente.
+3. Los sonidos del panel de sonidos del servidor se usan tal cual, con el
+   nombre que tienen en Discord (por ejemplo `El Manda Mas`).
+4. Opcional: para usar además archivos propios, pon el ID de un canal de
+   texto en *ID del canal con los audios* y sube ahí los audios. El nombre
+   del archivo es el nombre del sonido; si coincide con uno del panel, gana
+   el archivo. Para cambiarlo, súbelo de nuevo con el mismo nombre.
 
 ## Uso
 
 - El bot entra solo al canal de voz configurado y vuelve a entrar si lo sacan.
-- Los audios nuevos que se suban al canal de sonidos se descargan al momento.
+- Los sonidos nuevos del panel, o los audios que se suban al canal de sonidos,
+  se descargan al momento.
 - Si se edita el `config.json` (a mano o con el menú del instalador), el bot
   lo recarga en unos segundos sin reiniciar: así se añaden o cambian palabras
   clave, teclas y sonidos.

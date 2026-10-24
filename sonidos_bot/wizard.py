@@ -33,6 +33,7 @@ from .wizard_helpers import (
     binding_from_form,
     capture_gamepad_button,
     download_vosk_model,
+    fetch_soundboard_names,
     find_cached_sound,
     known_sounds,
     launch_bot,
@@ -235,7 +236,7 @@ class Wizard(ctk.CTk):
 
         self.ids: dict[str, tk.StringVar] = {}
         labels = [("guild_id", "ID del servidor"), ("voice_channel_id", "ID del canal de voz"),
-                  ("sounds_channel_id", "ID del canal con los audios")]
+                  ("sounds_channel_id", "ID del canal con los audios (opcional)")]
         for row, (name, label) in enumerate(labels, start=1):
             value = getattr(d, name)
             self.ids[name] = tk.StringVar(value=str(value) if value else "")
@@ -251,7 +252,9 @@ class Wizard(ctk.CTk):
             text=("¿Dónde encuentro esto?\n"
                   "•  Token: discord.com/developers → tu aplicación → Bot → Reset Token.\n"
                   "•  IDs: en Discord, Ajustes → Avanzado → Modo desarrollador. "
-                  "Luego clic derecho en el servidor o canal → Copiar ID."),
+                  "Luego clic derecho en el servidor o canal → Copiar ID.\n"
+                  "•  Canal con los audios: déjalo vacío para usar solo el panel de sonidos del servidor. "
+                  "Rellénalo si además quieres usar archivos subidos a un canal."),
         ).pack(fill="x", padx=18, pady=14)
 
     # -- Modos --------------------------------------------------------------
@@ -309,7 +312,9 @@ class Wizard(ctk.CTk):
         if folder:
             self.model_path.set(folder)
 
-    def _download_model(self) -> None:
+    def _download_model(self, then=None) -> None:
+        """Descarga el modelo de voz; ``then`` se llama al terminar bien."""
+        self._after_download = then
         self.download_btn.configure(state="disabled", text="Descargando…")
         progress = lambda fraction: self.call_in_ui(self.download_progress.set, fraction)
         done = lambda path, error: self.call_in_ui(self._download_finished, path, error)
@@ -322,13 +327,16 @@ class Wizard(ctk.CTk):
             return
         self.download_progress.set(1)
         self.model_path.set(str(path))
+        then, self._after_download = getattr(self, "_after_download", None), None
+        if then is not None:
+            then()
 
     # -- Sonidos ------------------------------------------------------------
 
     def _page_sounds(self, page) -> None:
         top = ctk.CTkFrame(page, fg_color="transparent")
         top.pack(fill="x")
-        page_header(top, "Sonidos", "Cada sonido es un archivo del canal de audios. "
+        page_header(top, "Sonidos", "Cada sonido sale del panel de sonidos del servidor o del canal de audios. "
                                     "Las palabras clave sirven igual para texto y para voz.", wrap=440)
         button(top, "+  Añadir sonido", self._add_binding, "accent").place(relx=1.0, x=-28, y=28, anchor="ne")
         self.sound_list = ctk.CTkScrollableFrame(page, fg_color="transparent")
@@ -378,8 +386,10 @@ class Wizard(ctk.CTk):
     def _preview(self, b: Binding) -> None:
         path = find_cached_sound(self.config_data.cache_dir, b.sound)
         if path is None:
-            messagebox.showinfo("Probar", f"'{b.sound}' todavía no está descargado.\n"
-                                          "Inicia el bot una vez para que baje los audios del canal.")
+            messagebox.showinfo("Probar", f"No encuentro '{b.sound}' entre los sonidos descargados.\n\n"
+                                          "Pulsa Editar y elige un nombre del desplegable (los del panel de "
+                                          "sonidos del servidor). Si la lista está vacía, inicia el bot una vez "
+                                          "para que descargue los sonidos.")
             return
         try:
             play_preview(path, volume=self.volume.get() / 100)
@@ -454,6 +464,9 @@ class Wizard(ctk.CTk):
         ids = {}
         labels = {"guild_id": "Servidor", "voice_channel_id": "Canal de voz", "sounds_channel_id": "Canal de audios"}
         for name, var in self.ids.items():
+            if name == "sounds_channel_id" and not var.get().strip():
+                ids[name] = 0  # opcional
+                continue
             try:
                 ids[name] = parse_discord_id(var.get(), labels[name])
             except ConfigError as exc:
@@ -479,6 +492,12 @@ class Wizard(ctk.CTk):
         return config
 
     def save(self, start: bool = False) -> None:
+        if self.modes["voice_keyword"].get() and not self.model_path.get().strip():
+            if messagebox.askyesno("Modelo de voz", "Palabra por voz necesita el modelo de voz en español (~40 MB).\n\n"
+                                                    "¿Lo descargo ahora y guardo al terminar?"):
+                self.show_page("modos")
+                self._download_model(then=lambda: self.save(start))
+            return
         try:
             config = self.build_config()
         except ConfigError as exc:
@@ -518,13 +537,14 @@ class BindingDialog(ctk.CTkToplevel):
         body.pack(fill="x", padx=24)
         body.grid_columnconfigure(0, weight=1)
 
-        field_label(body, "Archivo del sonido (en el canal de audios)").grid(
+        field_label(body, "Sonido (nombre en el panel de sonidos o archivo del canal)").grid(
             row=0, column=0, columnspan=3, sticky="we", padx=18, pady=(16, 4))
         self.sound = ctk.CTkComboBox(body, values=known_sounds(parent.config_data.cache_dir) or [""], height=36,
                                      fg_color=INPUT, border_width=0, button_color=CHIP, text_color=TEXT,
                                      dropdown_fg_color=INPUT, width=420)
         self.sound.set(b.sound)
         self.sound.grid(row=1, column=0, columnspan=3, sticky="we", padx=18)
+        self._load_soundboard_names()
 
         field_label(body, "Palabras clave · texto y voz (separadas por comas)").grid(
             row=2, column=0, columnspan=3, sticky="we", padx=18, pady=(14, 4))
@@ -584,6 +604,21 @@ class BindingDialog(ctk.CTkToplevel):
 
         self.bind("<KeyPress>", on_key)
         self.focus_set()
+
+    def _load_soundboard_names(self) -> None:
+        """Añade al desplegable los sonidos del panel del servidor, sin bloquear la ventana."""
+        token = self.parent.token.get().strip()
+        guild = self.parent.ids["guild_id"].get().strip()
+        if not token or not guild.isdigit():
+            return
+        done = lambda names, error: self.parent.call_in_ui(self._soundboard_names_loaded, names, error)
+        run_in_thread(lambda: fetch_soundboard_names(token, int(guild)), done)
+
+    def _soundboard_names_loaded(self, names, error) -> None:
+        if error or not names or not self.winfo_exists():
+            return  # sin conexión o sin panel: queda lo que ya había en caché
+        current = [v for v in self.sound.cget("values") if v]
+        self.sound.configure(values=sorted(set(current) | set(names)))
 
     def _capture_button(self) -> None:
         self.button_label.configure(text="  Pulsa un botón del mando…  ")

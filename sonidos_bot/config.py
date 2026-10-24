@@ -20,6 +20,7 @@ CONFIG_FILENAME = "config.json"
 TOKEN_ENV_VAR = "SONIDOS_BOT_TOKEN"
 
 VALID_MODES = ("keyboard", "gamepad", "text_keyword", "voice_keyword")
+AUDIO_EXTENSIONS = {".mp3", ".wav", ".ogg", ".m4a", ".flac", ".opus", ".webm"}
 
 
 class ConfigError(ValueError):
@@ -55,12 +56,16 @@ def normalize_text(text: str) -> str:
 
 
 def sound_key(filename: str) -> str:
-    """Clave única de un sonido a partir de su nombre de archivo.
+    """Clave única de un sonido a partir de su nombre de archivo o del panel de sonidos.
 
     Discord cambia los espacios por guiones bajos al subir adjuntos, así que
-    ``Chiqui Tapia.mp3`` y ``chiqui_tapia.mp3`` dan la misma clave.
+    ``Chiqui Tapia.mp3`` y ``chiqui_tapia.mp3`` dan la misma clave. Solo se
+    quita la extensión si es de audio, para que un nombre del panel de sonidos
+    como ``Sr. Tapia`` no pierda nada.
     """
-    stem = Path(filename).stem.replace("_", " ").replace("-", " ")
+    path = Path(filename)
+    stem = path.stem if path.suffix.lower() in AUDIO_EXTENSIONS else filename
+    stem = stem.replace("_", " ").replace("-", " ")
     return normalize_text(stem)
 
 
@@ -69,7 +74,7 @@ class DiscordSettings:
     token: str = ""
     guild_id: int = 0
     voice_channel_id: int = 0
-    sounds_channel_id: int = 0
+    sounds_channel_id: int = 0  # opcional: 0 = solo el panel de sonidos del servidor
 
 
 @dataclass
@@ -117,9 +122,11 @@ class Config:
         d = self.discord
         if not d.token:
             problems.append(f"Falta el token del bot (discord.token o variable {TOKEN_ENV_VAR}).")
-        for name in ("guild_id", "voice_channel_id", "sounds_channel_id"):
+        for name in ("guild_id", "voice_channel_id"):
             if getattr(d, name) <= 0:
                 problems.append(f"discord.{name} debe ser el ID numérico de Discord.")
+        if d.sounds_channel_id < 0:
+            problems.append("discord.sounds_channel_id debe ser el ID numérico de Discord o 0.")
 
         if not self.modes.enabled():
             problems.append("Hay que activar al menos un modo en 'modes'.")
@@ -128,7 +135,8 @@ class Config:
         if self.cooldown_seconds < 0:
             problems.append("cooldown_seconds no puede ser negativo.")
         if self.modes.voice_keyword and not self.voice_model_path:
-            problems.append("El modo voice_keyword necesita voice_model_path (modelo Vosk en español).")
+            problems.append("Palabra por voz necesita el modelo Vosk en español: en Modos pulsa «Descargar modelo» "
+                            "o desactiva Palabra por voz (voice_model_path vacío).")
 
         seen_hotkeys: dict[str, str] = {}
         seen_buttons: dict[int, str] = {}

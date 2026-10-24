@@ -75,3 +75,14 @@ def test_save_roundtrip(tmp_path):
 def test_default_config_is_invalid_until_filled():
     with pytest.raises(ConfigError):
         Config().validate()
+
+
+def test_sound_key_keeps_dots_in_soundboard_names():
+    assert sound_key("El Manda Mas") == "el manda mas"
+    assert sound_key("Sr. Tapia") == "sr. tapia"
+
+
+def test_sounds_channel_is_optional():
+    config = load_config(EXAMPLE)
+    config.discord.sounds_channel_id = 0
+    config.validate()

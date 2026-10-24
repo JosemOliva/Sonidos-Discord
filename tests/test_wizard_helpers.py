@@ -80,3 +80,11 @@ def test_describe_no_button_con_mando():
     msg = describe_no_button([("Xbox 360 Controller", 11)])
     assert "Xbox 360 Controller (11 botones)" in msg
     assert "cruceta" in msg
+
+
+def test_soundboard_names():
+    from sonidos_bot.wizard_helpers import soundboard_names
+
+    data = {"items": [{"name": "El Manda Mas"}, {"name": "Angel"}, {"name": ""}, {"name": "Angel"}]}
+    assert soundboard_names(data) == ["Angel", "El Manda Mas"]
+    assert soundboard_names([]) == []

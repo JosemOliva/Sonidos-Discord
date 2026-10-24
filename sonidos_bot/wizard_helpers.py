@@ -116,12 +116,29 @@ def binding_from_form(sound: str, hotkey: str, button: str, keywords: str) -> Bi
 
 
 def known_sounds(cache_dir: Path) -> list[str]:
-    """Nombres de archivo que el bot ya descargó del canal (para el desplegable)."""
+    """Nombres de los sonidos que el bot ya descargó (para el desplegable)."""
     index = cache_dir / "index.json"
     try:
         return sorted(e["filename"] for e in json.loads(index.read_text(encoding="utf-8")))
     except (OSError, ValueError, KeyError, TypeError):
         return []
+
+
+def fetch_soundboard_names(token: str, guild_id: int, timeout: float = 10.0) -> list[str]:
+    """Nombres del panel de sonidos del servidor, leídos con el token del bot."""
+    request = urllib.request.Request(
+        f"https://discord.com/api/v10/guilds/{guild_id}/soundboard-sounds",
+        headers={"Authorization": f"Bot {token}", "User-Agent": "DiscordBot (SonidosBot, 1.0)"},
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        data = json.loads(response.read().decode("utf-8"))
+    return soundboard_names(data)
+
+
+def soundboard_names(data) -> list[str]:
+    """Extrae los nombres de la respuesta de la API (``{"items": [...]}``)."""
+    items = data.get("items", []) if isinstance(data, dict) else data
+    return sorted({item["name"] for item in items if isinstance(item, dict) and item.get("name")})
 
 
 def find_cached_sound(cache_dir: Path, sound: str) -> Path | None:
