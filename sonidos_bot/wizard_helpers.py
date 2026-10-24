@@ -12,13 +12,10 @@ import sys
 import threading
 import time
 import urllib.request
-import zipfile
 from pathlib import Path
 
-from .config import Binding, ConfigError, app_data_dir, sound_key
+from .config import Binding, ConfigError, sound_key
 
-VOSK_MODEL_NAME = "vosk-model-small-es-0.42"
-VOSK_MODEL_URL = f"https://alphacephei.com/vosk/models/{VOSK_MODEL_NAME}.zip"
 
 # Teclas de tkinter (keysym) que pynput nombra distinto.
 _SPECIAL_KEYS = {
@@ -91,11 +88,6 @@ def pretty_hotkey(hotkey: str | None) -> str:
     return " + ".join(parts)
 
 
-def parse_keywords(text: str) -> list[str]:
-    """"chiqui tapia, manda más" -> ["chiqui tapia", "manda más"]."""
-    return [k.strip() for k in text.replace(";", ",").replace("\n", ",").split(",") if k.strip()]
-
-
 def parse_discord_id(text: str, label: str) -> int:
     text = text.strip()
     if not text.isdigit():
@@ -103,7 +95,7 @@ def parse_discord_id(text: str, label: str) -> int:
     return int(text)
 
 
-def binding_from_form(sound: str, hotkey: str, button: str, keywords: str) -> Binding:
+def binding_from_form(sound: str, hotkey: str, button: str) -> Binding:
     button = button.strip()
     if button and not button.isdigit():
         raise ConfigError([f"El botón de mando de '{sound}' debe ser un número (0, 1, 2...)."])
@@ -111,7 +103,6 @@ def binding_from_form(sound: str, hotkey: str, button: str, keywords: str) -> Bi
         sound=sound.strip(),
         hotkey=hotkey.strip() or None,
         gamepad_button=int(button) if button else None,
-        keywords=parse_keywords(keywords),
     )
 
 
@@ -179,24 +170,28 @@ def capture_gamepad_button(timeout: float = 10.0) -> int | None:
     from .triggers import xinput
     from .triggers.gamepad import buttons_down, init_pygame_joystick
 
-    pygame = init_pygame_joystick()
     deadline = time.monotonic() + timeout
-    sticks: list = []
-    try:
+    if xinput.connected_pads():
+        # Mando tipo Xbox: basta XInput, y así no se toca pygame mientras el bot lo usa en otro hilo.
         while time.monotonic() < deadline:
-            pygame.event.pump()
-            if pygame.joystick.get_count() != len(sticks):
-                sticks = [pygame.joystick.Joystick(i) for i in range(pygame.joystick.get_count())]
-            down = buttons_down(sticks)
+            down = xinput.pressed_buttons()
             if down:
                 return min(down)
             time.sleep(0.01)
-        found = [(s.get_name(), s.get_numbuttons()) for s in sticks]
-        if not found and xinput.connected_pads():
-            found = [("Mando XInput", len(xinput.BUTTON_BITS))]
-        raise RuntimeError(describe_no_button(found))
-    finally:
-        pygame.joystick.quit()
+        raise RuntimeError(describe_no_button([("Mando XInput", len(xinput.BUTTON_BITS))]))
+
+    # No se llama a pygame.joystick.quit(): el bot puede estar leyendo el mando en este mismo proceso.
+    pygame = init_pygame_joystick()
+    sticks: list = []
+    while time.monotonic() < deadline:
+        pygame.event.pump()
+        if pygame.joystick.get_count() != len(sticks):
+            sticks = [pygame.joystick.Joystick(i) for i in range(pygame.joystick.get_count())]
+        down = buttons_down(sticks)
+        if down:
+            return min(down)
+        time.sleep(0.01)
+    raise RuntimeError(describe_no_button([(s.get_name(), s.get_numbuttons()) for s in sticks]))
 
 
 def describe_no_button(sticks: list[tuple[str, int]]) -> str:
@@ -210,37 +205,17 @@ def describe_no_button(sticks: list[tuple[str, int]]) -> str:
             "La cruceta y los gatillos LT/RT todavía no se pueden usar.")
 
 
-def download_vosk_model(dest_dir: Path | None = None, progress=None) -> Path:
-    """Descarga y descomprime el modelo de voz en español. Devuelve su carpeta."""
-    dest_dir = dest_dir or app_data_dir() / "modelos"
-    target = dest_dir / VOSK_MODEL_NAME
-    if target.is_dir():
-        return target
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    zip_path = dest_dir / f"{VOSK_MODEL_NAME}.zip"
+def already_running(name: str = "SonidosBot") -> bool:
+    """True si ya hay otra ventana de la app abierta (solo Windows), para no tener dos bots."""
+    if sys.platform != "win32":
+        return False
+    import ctypes
 
-    def hook(blocks, block_size, total):
-        if progress and total > 0:
-            progress(min(1.0, blocks * block_size / total))
-
-    urllib.request.urlretrieve(VOSK_MODEL_URL, zip_path, reporthook=hook)
-    with zipfile.ZipFile(zip_path) as zf:
-        zf.extractall(dest_dir)
-    zip_path.unlink(missing_ok=True)
-    return target
-
-
-def bot_command() -> list[str]:
-    """Comando para lanzar el bot, empaquetado o desde el código fuente."""
-    if getattr(sys, "frozen", False):
-        exe = Path(sys.executable).with_name("SonidosBot.exe")
-        return [str(exe)]
-    return [sys.executable, "-m", "sonidos_bot"]
-
-
-def launch_bot() -> None:
-    flags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
-    subprocess.Popen(bot_command(), creationflags=flags, close_fds=True)
+    kernel32 = ctypes.windll.kernel32
+    already_exists = 183  # ERROR_ALREADY_EXISTS
+    # El mutex se mantiene mientras viva el proceso; Windows lo libera al cerrar.
+    already_running.handle = kernel32.CreateMutexW(None, False, f"Local\\{name}")
+    return kernel32.GetLastError() == already_exists
 
 
 def run_in_thread(target, on_done) -> threading.Thread:

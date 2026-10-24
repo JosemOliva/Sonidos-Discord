@@ -8,7 +8,7 @@ Flujo:
 
 El config se vigila en disco: si se edita (a mano o desde el menú del
 instalador) se recarga sin reiniciar el bot, así se pueden añadir o cambiar
-palabras clave, teclas y sonidos en caliente.
+teclas, botones y sonidos en caliente.
 
 Al cerrar la ventana de la consola en Windows, el bot sale del canal de voz
 antes de terminar; si no, Discord lo deja dentro un buen rato.
@@ -28,7 +28,6 @@ from .config import Config, ConfigError, load_config, normalize_text
 from .player import Player
 from .sound_library import SoundLibrary
 from .triggers import TRIGGERS, Trigger
-from .triggers.text_keyword import TextKeywordTrigger
 
 log = logging.getLogger("sonidos_bot.bot")
 
@@ -37,27 +36,20 @@ CLOSE_TIMEOUT_SECONDS = 4  # Windows mata el proceso unos 5 s después de cerrar
 REJOIN_DELAY_SECONDS = 5
 
 
-def voice_client_class(config: Config) -> type[discord.VoiceProtocol] | None:
-    """El modo por voz necesita un cliente que además reciba audio."""
-    if not config.modes.voice_keyword:
-        return None
-    from discord.ext import voice_recv
-
-    return voice_recv.VoiceRecvClient
-
-
 class SoundBot(discord.Client):
-    def __init__(self, config: Config):
+    def __init__(self, config: Config, on_connected=None):
         intents = discord.Intents.default()
-        intents.message_content = True  # necesario para las palabras clave por texto
+        # Leer los adjuntos del canal de audios (opcional) exige "Message Content Intent".
+        intents.message_content = bool(config.discord.sounds_channel_id)
         intents.voice_states = True
         super().__init__(intents=intents)
         self.config = config
         self.tree = app_commands.CommandTree(self)
         self.library = SoundLibrary(config)
-        self.player = Player(config, voice_client_class(config))
+        self.player = Player(config)
         self.triggers: list[Trigger] = []
         self._ready_once = False
+        self._on_connected = on_connected  # lo usa la app para mostrar "Conectado"
         self._main_loop: asyncio.AbstractEventLoop | None = None
         self._config_mtime = self._read_config_mtime()
         self._register_commands()
@@ -106,6 +98,8 @@ class SoundBot(discord.Client):
         await self._join_voice()
         await self._start_triggers()
         self._watch_config.start()
+        if self._on_connected is not None:
+            self._on_connected(self)
 
     async def close(self) -> None:
         await self._stop_triggers()
@@ -143,9 +137,7 @@ class SoundBot(discord.Client):
         if not isinstance(channel, (discord.VoiceChannel, discord.StageChannel)):
             log.error("voice_channel_id no es un canal de voz del servidor")
             return
-        voice = await self.player.connect(channel)
-        for trigger in self.triggers:
-            trigger.voice_connected(voice)
+        await self.player.connect(channel)
 
     async def _start_triggers(self) -> None:
         loop = asyncio.get_running_loop()
@@ -157,8 +149,6 @@ class SoundBot(discord.Client):
                 log.exception("No se pudo iniciar el modo '%s'", mode)
                 continue
             self.triggers.append(trigger)
-            if self.player.connected:
-                trigger.voice_connected(self.player.voice)
             log.info("Modo '%s' activo", mode)
 
     async def _stop_triggers(self) -> None:
@@ -187,10 +177,6 @@ class SoundBot(discord.Client):
             return
         if message.channel.id == self.config.discord.sounds_channel_id:
             await self.library.add_from_message(message)
-            return
-        for trigger in self.triggers:
-            if isinstance(trigger, TextKeywordTrigger):
-                trigger.handle_message(message.content)
 
     async def on_soundboard_sound_create(self, sound) -> None:
         await self._soundboard_changed(sound)
@@ -252,10 +238,8 @@ class SoundBot(discord.Client):
         for missing in self.library.missing_bindings():
             log.warning("El sonido '%s' está en el config pero no en Discord", missing)
 
-        new_cls = voice_client_class(new)
-        if new.discord.voice_channel_id != old.discord.voice_channel_id or new_cls is not self.player.voice_client_cls:
+        if new.discord.voice_channel_id != old.discord.voice_channel_id:
             await self.player.disconnect()
-            self.player.voice_client_cls = new_cls
             await self._join_voice()
 
         await self._start_triggers()
@@ -272,8 +256,6 @@ class SoundBot(discord.Client):
             for key in self.library.names():
                 b = bindings.get(key)
                 extra = []
-                if b and b.keywords:
-                    extra.append("palabras: " + ", ".join(f'"{k}"' for k in b.keywords))
                 if b and b.hotkey:
                     extra.append(f"tecla: {b.hotkey}")
                 if b and b.gamepad_button is not None:
