@@ -9,12 +9,11 @@ ROOT = Path(SPECPATH).parent
 
 datas, binaries, hiddenimports = [], [], []
 # customtkinter trae temas y fuentes como archivos de datos.
-for package in ("discord", "davey", "vosk", "pygame", "customtkinter"):
+for package in ("discord", "davey", "pygame", "customtkinter"):
     d, b, h = collect_all(package)
     datas += d
     binaries += b
     hiddenimports += h
-hiddenimports += collect_submodules("discord.ext.voice_recv")
 hiddenimports += collect_submodules("pynput")
 
 ffmpeg = ROOT / "installer" / "vendor" / "ffmpeg.exe"
@@ -23,8 +22,11 @@ if ffmpeg.exists():
 else:
     print("AVISO: falta installer/vendor/ffmpeg.exe, el bot necesitará ffmpeg en el PATH")
 
-icon = ROOT / "installer" / "icono.ico"
-icon = str(icon) if icon.exists() else None
+# Icono del programa; el mismo archivo va dentro para la ventana (wizard.py).
+icon = ROOT / "sonidos_bot" / "assets" / "icono.ico"
+datas += [(str(icon), "sonidos_bot/assets"), (str(icon.with_suffix(".png")), "sonidos_bot/assets")]
+# Fuente de la app (Montserrat), se carga al abrir la ventana.
+datas += [(str(f), "sonidos_bot/assets/fuentes") for f in (ROOT / "sonidos_bot" / "assets" / "fuentes").iterdir()]
 
 a = Analysis(
     [str(ROOT / "run.py")],
@@ -39,6 +41,6 @@ exe = EXE(
     exclude_binaries=True,
     name="SonidosBot",
     console=False,
-    icon=icon,
+    icon=str(icon),
 )
 COLLECT(exe, a.binaries, a.datas, name="SonidosBot")

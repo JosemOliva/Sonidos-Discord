@@ -12,13 +12,10 @@ import sys
 import threading
 import time
 import urllib.request
-import zipfile
 from pathlib import Path
 
-from .config import Binding, ConfigError, app_data_dir, sound_key
+from .config import Binding, ConfigError, sound_key
 
-VOSK_MODEL_NAME = "vosk-model-small-es-0.42"
-VOSK_MODEL_URL = f"https://alphacephei.com/vosk/models/{VOSK_MODEL_NAME}.zip"
 
 # Teclas de tkinter (keysym) que pynput nombra distinto.
 _SPECIAL_KEYS = {
@@ -91,11 +88,6 @@ def pretty_hotkey(hotkey: str | None) -> str:
     return " + ".join(parts)
 
 
-def parse_keywords(text: str) -> list[str]:
-    """"chiqui tapia, manda más" -> ["chiqui tapia", "manda más"]."""
-    return [k.strip() for k in text.replace(";", ",").replace("\n", ",").split(",") if k.strip()]
-
-
 def parse_discord_id(text: str, label: str) -> int:
     text = text.strip()
     if not text.isdigit():
@@ -103,7 +95,7 @@ def parse_discord_id(text: str, label: str) -> int:
     return int(text)
 
 
-def binding_from_form(sound: str, hotkey: str, button: str, keywords: str) -> Binding:
+def binding_from_form(sound: str, hotkey: str, button: str) -> Binding:
     button = button.strip()
     if button and not button.isdigit():
         raise ConfigError([f"El botón de mando de '{sound}' debe ser un número (0, 1, 2...)."])
@@ -111,7 +103,6 @@ def binding_from_form(sound: str, hotkey: str, button: str, keywords: str) -> Bi
         sound=sound.strip(),
         hotkey=hotkey.strip() or None,
         gamepad_button=int(button) if button else None,
-        keywords=parse_keywords(keywords),
     )
 
 
@@ -212,26 +203,6 @@ def describe_no_button(sticks: list[tuple[str, int]]) -> str:
     return (f"Mandos detectados:\n{names}\n\n"
             "Pulsa un botón normal (A, B, X, Y, LB, RB, Start...). "
             "La cruceta y los gatillos LT/RT todavía no se pueden usar.")
-
-
-def download_vosk_model(dest_dir: Path | None = None, progress=None) -> Path:
-    """Descarga y descomprime el modelo de voz en español. Devuelve su carpeta."""
-    dest_dir = dest_dir or app_data_dir() / "modelos"
-    target = dest_dir / VOSK_MODEL_NAME
-    if target.is_dir():
-        return target
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    zip_path = dest_dir / f"{VOSK_MODEL_NAME}.zip"
-
-    def hook(blocks, block_size, total):
-        if progress and total > 0:
-            progress(min(1.0, blocks * block_size / total))
-
-    urllib.request.urlretrieve(VOSK_MODEL_URL, zip_path, reporthook=hook)
-    with zipfile.ZipFile(zip_path) as zf:
-        zf.extractall(dest_dir)
-    zip_path.unlink(missing_ok=True)
-    return target
 
 
 def already_running(name: str = "SonidosBot") -> bool:
