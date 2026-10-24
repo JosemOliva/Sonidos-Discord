@@ -3,8 +3,8 @@
 Tema oscuro con los colores de Discord y una barra lateral con estas
 secciones:
   Conexión: token e IDs del servidor y los canales.
-  Modos:    teclado, mando, palabra clave por texto y por voz.
-  Sonidos:  cada sonido con sus palabras clave, su tecla y su botón.
+  Modos:    teclado y mando.
+  Sonidos:  cada sonido con su tecla y su botón del mando.
   Ajustes:  volumen, tiempo entre sonidos y carpeta de datos.
   Registro: lo que va haciendo el bot.
 
@@ -22,8 +22,10 @@ from __future__ import annotations
 import argparse
 import logging
 import queue
+import sys
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from pathlib import Path
+from tkinter import messagebox
 
 import customtkinter as ctk
 
@@ -42,7 +44,6 @@ from .wizard_helpers import (
     already_running,
     binding_from_form,
     capture_gamepad_button,
-    download_vosk_model,
     fetch_soundboard_names,
     find_cached_sound,
     known_sounds,
@@ -73,17 +74,17 @@ GRAY_BTN = "#4E5058"
 GRAY_HOVER = "#6D6F78"
 
 DEFAULT_BINDINGS = [
-    Binding(sound="chiqui_tapia.mp3", hotkey="<ctrl>+<alt>+1", gamepad_button=0, keywords=["chiqui tapia"]),
-    Binding(sound="manda_mas.mp3", hotkey="<ctrl>+<alt>+2", gamepad_button=1, keywords=["manda mas"]),
-    Binding(sound="uruguayo.mp3", hotkey="<ctrl>+<alt>+3", gamepad_button=2, keywords=["uruguayo"]),
+    Binding(sound="chiqui_tapia.mp3", hotkey="<ctrl>+<alt>+1", gamepad_button=0),
+    Binding(sound="manda_mas.mp3", hotkey="<ctrl>+<alt>+2", gamepad_button=1),
+    Binding(sound="uruguayo.mp3", hotkey="<ctrl>+<alt>+3", gamepad_button=2),
 ]
 
 MODES = [
     ("keyboard", "⌨", "Teclado", "Un atajo en esta PC reproduce el sonido, incluso dentro de un juego."),
     ("gamepad", "🎮", "Mando", "Un botón del mando conectado a esta PC reproduce el sonido."),
-    ("text_keyword", "💬", "Palabra por texto", "Alguien escribe la palabra clave en el chat del servidor."),
-    ("voice_keyword", "🎙", "Palabra por voz", "Alguien dice la palabra clave en el canal de voz."),
 ]
+
+ASSETS = Path(__file__).resolve().parent / "assets"  # icono.ico (ventana) e icono.png (barra lateral)
 
 PAGES = [("conexion", "Conexión"), ("modos", "Modos"), ("sonidos", "Sonidos"), ("ajustes", "Ajustes"),
          ("registro", "Registro")]
@@ -102,7 +103,7 @@ def load_or_default() -> Config:
         return load_config(validate=False)
     except FileNotFoundError:
         config = Config(bindings=[Binding(**vars(b)) for b in DEFAULT_BINDINGS])
-        config.modes.voice_keyword = True
+        config.modes.gamepad = True
         return config
     except ConfigError as exc:
         messagebox.showwarning("Config dañado", f"No se pudo leer el config, empiezo de cero.\n\n{exc}")
@@ -177,6 +178,7 @@ class Wizard(ctk.CTk):
         ctk.set_appearance_mode("dark")
         super().__init__(fg_color=BG)
         self.title("Sonidos Bot")
+        self._set_window_icon()
         self.geometry("920x620")
         self.minsize(860, 560)
         self.config_data = load_or_default()
@@ -204,6 +206,13 @@ class Wizard(ctk.CTk):
         if autostart and self.config_data.discord.token:
             self.after(300, lambda: self.save(start=True))
 
+    def _set_window_icon(self) -> None:
+        icon = ASSETS / "icono.ico"
+        if sys.platform != "win32" or not icon.exists():
+            return
+        # customtkinter pone su propio icono a los 200 ms; se aplica el nuestro después.
+        self.after(250, lambda: self.iconbitmap(str(icon)))
+
     # -- hilos --------------------------------------------------------------
 
     def call_in_ui(self, fn, *args) -> None:
@@ -225,7 +234,13 @@ class Wizard(ctk.CTk):
         side.grid_columnconfigure(0, weight=1)
         side.grid_rowconfigure(len(PAGES) + 2, weight=1)
 
-        ctk.CTkLabel(side, text="🔊 Sonidos Bot", font=font(20, bold=True), text_color=TEXT, anchor="w").grid(
+        logo = None
+        if (ASSETS / "icono.png").exists():
+            from PIL import Image
+
+            logo = ctk.CTkImage(Image.open(ASSETS / "icono.png"), size=(28, 28))
+        ctk.CTkLabel(side, text="  Sonidos Bot" if logo else "Sonidos Bot", image=logo, compound="left",
+                     font=font(20, bold=True), text_color=TEXT, anchor="w").grid(
             row=0, column=0, sticky="we", padx=20, pady=(24, 0))
         ctk.CTkLabel(side, text=f"v{__version__}", font=font(12), text_color=MUTED, anchor="w").grid(
             row=1, column=0, sticky="we", padx=20, pady=(0, 20))
@@ -326,63 +341,17 @@ class Wizard(ctk.CTk):
             ctk.CTkSwitch(box, text="", variable=self.modes[name], width=46, progress_color=GREEN,
                           command=self._on_modes_changed).grid(row=0, column=2, rowspan=2, padx=16)
 
-        voice = card(page)
-        voice.pack(fill="x", padx=28, pady=(7, 0))
-        voice.grid_columnconfigure(0, weight=1)
-        field_label(voice, "Modelo de voz en español (para 'Palabra por voz')").grid(
-            row=0, column=0, columnspan=2, sticky="we", padx=18, pady=(16, 4))
-        self.model_path = tk.StringVar(value=self.config_data.voice_model_path)
-        self.model_entry = entry(voice, self.model_path, placeholder_text="Carpeta del modelo Vosk")
-        self.model_entry.grid(row=1, column=0, sticky="we", padx=(18, 8))
-        self.browse_btn = button(voice, "Examinar…", self._browse_model, "gray", width=110)
-        self.browse_btn.grid(row=1, column=1, padx=(0, 18))
-        self.download_btn = button(voice, "⬇  Descargar modelo (~40 MB)", self._download_model, "accent")
-        self.download_btn.grid(row=2, column=0, sticky="w", padx=18, pady=(10, 16))
-        self.download_progress = ctk.CTkProgressBar(voice, progress_color=ACCENT, fg_color=INPUT, width=160)
-        self.download_progress.set(0)
-        self.download_progress.grid(row=2, column=1, padx=(0, 18), pady=(10, 16))
-        self._update_voice_box()
 
     def _on_modes_changed(self) -> None:
-        self._update_voice_box()
         self._refresh_sounds()
-
-    def _update_voice_box(self) -> None:
-        state = "normal" if self.modes["voice_keyword"].get() else "disabled"
-        for widget in (self.model_entry, self.browse_btn, self.download_btn):
-            widget.configure(state=state)
-
-    def _browse_model(self) -> None:
-        folder = filedialog.askdirectory(title="Carpeta del modelo Vosk")
-        if folder:
-            self.model_path.set(folder)
-
-    def _download_model(self, then=None) -> None:
-        """Descarga el modelo de voz; ``then`` se llama al terminar bien."""
-        self._after_download = then
-        self.download_btn.configure(state="disabled", text="Descargando…")
-        progress = lambda fraction: self.call_in_ui(self.download_progress.set, fraction)
-        done = lambda path, error: self.call_in_ui(self._download_finished, path, error)
-        run_in_thread(lambda: download_vosk_model(progress=progress), done)
-
-    def _download_finished(self, path, error) -> None:
-        self.download_btn.configure(state="normal", text="⬇  Descargar modelo (~40 MB)")
-        if error:
-            messagebox.showerror("Error", f"No se pudo descargar el modelo:\n{error}")
-            return
-        self.download_progress.set(1)
-        self.model_path.set(str(path))
-        then, self._after_download = getattr(self, "_after_download", None), None
-        if then is not None:
-            then()
 
     # -- Sonidos ------------------------------------------------------------
 
     def _page_sounds(self, page) -> None:
         top = ctk.CTkFrame(page, fg_color="transparent")
         top.pack(fill="x")
-        page_header(top, "Sonidos", "Cada sonido sale del panel de sonidos del servidor o del canal de audios. "
-                                    "Las palabras clave sirven igual para texto y para voz.", wrap=440)
+        page_header(top, "Sonidos", "Cada sonido sale del panel de sonidos del servidor o del canal de audios "
+                                    "y se dispara con su tecla o su botón del mando.", wrap=440)
         button(top, "+  Añadir sonido", self._add_binding, "accent").place(relx=1.0, x=-28, y=28, anchor="ne")
         self.sound_list = ctk.CTkScrollableFrame(page, fg_color="transparent")
         self.sound_list.pack(fill="both", expand=True, padx=20, pady=(0, 16))
@@ -413,8 +382,6 @@ class Wizard(ctk.CTk):
         chips = ctk.CTkFrame(box, fg_color="transparent")
         chips.grid(row=2, column=0, sticky="w", padx=14, pady=(8, 14))
         items = []
-        if modes.get("text_keyword", True) or modes.get("voice_keyword", True):
-            items += [f"💬 {k}" for k in b.keywords]
         if modes.get("keyboard", True) and b.hotkey:
             items.append(f"⌨ {pretty_hotkey(b.hotkey)}")
         if modes.get("gamepad", True) and b.gamepad_button is not None:
@@ -569,8 +536,7 @@ class Wizard(ctk.CTk):
         id_errors = bool(problems)
 
         config = Config(bindings=list(self.bindings), volume=self.volume.get() / 100,
-                        cooldown_seconds=round(float(self.cooldown.get()), 1),
-                        voice_model_path=self.model_path.get().strip())
+                        cooldown_seconds=round(float(self.cooldown.get()), 1))
         config.discord.token = self.token.get().strip()
         for name, value in ids.items():
             setattr(config.discord, name, value)
@@ -586,12 +552,6 @@ class Wizard(ctk.CTk):
         return config
 
     def save(self, start: bool = False) -> None:
-        if self.modes["voice_keyword"].get() and not self.model_path.get().strip():
-            if messagebox.askyesno("Modelo de voz", "Palabra por voz necesita el modelo de voz en español (~40 MB).\n\n"
-                                                    "¿Lo descargo ahora y guardo al terminar?"):
-                self.show_page("modos")
-                self._download_model(then=lambda: self.save(start))
-            return
         try:
             config = self.build_config()
         except ConfigError as exc:
@@ -642,12 +602,6 @@ class BindingDialog(ctk.CTkToplevel):
         self.sound.set(b.sound)
         self.sound.grid(row=1, column=0, columnspan=3, sticky="we", padx=18)
         self._load_soundboard_names()
-
-        field_label(body, "Palabras clave · texto y voz (separadas por comas)").grid(
-            row=2, column=0, columnspan=3, sticky="we", padx=18, pady=(14, 4))
-        self.keywords = tk.StringVar(value=", ".join(b.keywords))
-        entry(body, self.keywords, placeholder_text="chiqui tapia, chiqui").grid(
-            row=3, column=0, columnspan=3, sticky="we", padx=18)
 
         field_label(body, "Tecla").grid(row=4, column=0, columnspan=3, sticky="we", padx=18, pady=(14, 4))
         self.hotkey_label = chip(body, "")
@@ -741,7 +695,7 @@ class BindingDialog(ctk.CTkToplevel):
             return
         button_text = "" if self.button_value is None else str(self.button_value)
         try:
-            self.result = binding_from_form(sound, self.hotkey_value or "", button_text, self.keywords.get())
+            self.result = binding_from_form(sound, self.hotkey_value or "", button_text)
         except ConfigError as exc:
             messagebox.showerror("Error", "\n".join(exc.problems), parent=self)
             return

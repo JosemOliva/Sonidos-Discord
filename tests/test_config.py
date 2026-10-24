@@ -18,7 +18,7 @@ EXAMPLE = __import__("pathlib").Path(__file__).parent.parent / "config.example.j
 
 def test_example_config_is_valid():
     config = load_config(EXAMPLE)
-    assert config.modes.enabled() == ["keyboard", "text_keyword", "voice_keyword"]
+    assert config.modes.enabled() == ["keyboard", "gamepad"]
     assert [b.sound_key for b in config.bindings] == ["chiqui tapia", "manda mas", "uruguayo"]
     assert config.bindings[0].sound_key == "chiqui tapia"
 
@@ -42,19 +42,24 @@ def test_env_token_overrides_file(tmp_path, monkeypatch):
 
 def test_detects_duplicates_and_empty_bindings():
     config = load_config(EXAMPLE)
-    config.bindings.append(Binding(sound="otro.mp3", hotkey="<CTRL>+<alt>+1", gamepad_button=0, keywords=["Chiqui Tapía"]))
+    config.bindings.append(Binding(sound="otro.mp3", hotkey="<CTRL>+<alt>+1", gamepad_button=0))
     config.bindings.append(Binding(sound="vacio.mp3"))
     with pytest.raises(ConfigError) as exc:
         config.validate()
     text = str(exc.value)
-    assert "tecla" in text and "botón 0" in text and "palabra clave" in text and "vacio.mp3" in text
+    assert "tecla" in text and "botón 0" in text and "vacio.mp3" in text
 
 
-def test_voice_mode_requires_model():
-    config = load_config(EXAMPLE)
-    config.voice_model_path = ""
-    with pytest.raises(ConfigError, match="Vosk"):
-        config.validate()
+def test_old_config_with_keywords_still_loads(tmp_path):
+    data = json.loads(EXAMPLE.read_text(encoding="utf-8"))
+    data["modes"].update(text_keyword=True, voice_keyword=True)
+    data["bindings"][0]["keywords"] = ["chiqui tapia"]
+    data["voice_model_path"] = "C:\\modelo"
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    config = load_config(path)
+    assert config.modes.enabled() == ["keyboard", "gamepad"]
+    assert "keywords" not in config.to_dict()["bindings"][0]
 
 
 def test_unknown_key_is_reported(tmp_path):

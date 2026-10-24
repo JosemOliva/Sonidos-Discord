@@ -1,7 +1,6 @@
-"""Contrato común para todos los disparadores (teclado, mando, palabra clave).
+"""Contrato común para los disparadores (teclado y mando).
 
-Cada disparador corre por su cuenta (algunos en hilos propios, como el
-teclado o el mando) y, cuando detecta algo, llama a ``fire`` con el nombre
+Cada disparador corre en un hilo propio y, cuando detecta algo, llama a ``fire`` con el nombre
 del sonido. ``fire`` es seguro de llamar desde cualquier hilo: entrega el
 pedido al bucle de asyncio del bot.
 """
@@ -39,6 +38,3 @@ class Trigger(ABC):
     @abstractmethod
     async def stop(self) -> None:
         """Libera hilos, dispositivos y hooks."""
-
-    def voice_connected(self, voice) -> None:
-        """El bot entró (o volvió a entrar) al canal de voz. Solo lo usa el modo por voz."""
