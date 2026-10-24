@@ -22,29 +22,43 @@ Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
 ArchitecturesInstallIn64BitMode=x64compatible
-UninstallDisplayIcon={app}\SonidosBot.exe
+UninstallDisplayIcon={app}\icono.ico
+SetupIconFile=..\sonidos_bot\assets\icono.ico
+; Avisa a Windows que refresque los iconos: si no, el acceso directo de una
+; versión anterior puede seguir mostrando el icono viejo (el de Python).
+ChangesAssociations=yes
 
 [Languages]
 Name: "spanish"; MessagesFile: "compiler:Languages\Spanish.isl"
 
 [Tasks]
-Name: "desktopicon"; Description: "Crear accesos directos en el escritorio"; GroupDescription: "Accesos directos:"
+Name: "desktopicon"; Description: "Crear un acceso directo en el escritorio"; GroupDescription: "Accesos directos:"
 Name: "startup"; Description: "Iniciar el bot al encender Windows"; GroupDescription: "Inicio automático:"; Flags: unchecked
+
+[InstallDelete]
+; Versiones anteriores tenían un segundo programa (el menú aparte) y su acceso
+; directo; el de inicio con Windows se vuelve a crear solo si se marca.
+Type: files; Name: "{app}\ConfigurarSonidosBot.exe"
+Type: files; Name: "{group}\Configurar Sonidos Bot.lnk"
+Type: files; Name: "{autodesktop}\Configurar Sonidos Bot.lnk"
+Type: files; Name: "{userstartup}\Sonidos Bot.lnk"
+; Los accesos directos se recrean con el icono nuevo.
+Type: files; Name: "{autodesktop}\Sonidos Bot.lnk"
+Type: files; Name: "{group}\Sonidos Bot.lnk"
 
 [Files]
 Source: "..\dist\SonidosBot\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\sonidos_bot\assets\icono.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\Sonidos Bot"; Filename: "{app}\SonidosBot.exe"
-Name: "{group}\Configurar Sonidos Bot"; Filename: "{app}\ConfigurarSonidosBot.exe"
+Name: "{group}\Sonidos Bot"; Filename: "{app}\SonidosBot.exe"; IconFilename: "{app}\icono.ico"
 Name: "{group}\Desinstalar Sonidos Bot"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\Sonidos Bot"; Filename: "{app}\SonidosBot.exe"; Tasks: desktopicon
-Name: "{autodesktop}\Configurar Sonidos Bot"; Filename: "{app}\ConfigurarSonidosBot.exe"; Tasks: desktopicon
-Name: "{userstartup}\Sonidos Bot"; Filename: "{app}\SonidosBot.exe"; Tasks: startup; Flags: runminimized
+Name: "{autodesktop}\Sonidos Bot"; Filename: "{app}\SonidosBot.exe"; IconFilename: "{app}\icono.ico"; Tasks: desktopicon
+Name: "{userstartup}\Sonidos Bot"; Filename: "{app}\SonidosBot.exe"; IconFilename: "{app}\icono.ico"; Parameters: "--iniciar --minimizado"; Tasks: startup
 
 [Run]
-; Al terminar, abre el menú para elegir modos, sonidos y palabras clave.
-Filename: "{app}\ConfigurarSonidosBot.exe"; Description: "Configurar el bot ahora"; Flags: postinstall nowait skipifsilent
+; Al terminar, abre la app para elegir modos, sonidos, teclas y botones.
+Filename: "{app}\SonidosBot.exe"; Description: "Abrir Sonidos Bot ahora"; Flags: postinstall nowait skipifsilent
 
 [UninstallDelete]
 ; La configuración y los sonidos en %APPDATA%\SonidosBot se conservan a propósito.

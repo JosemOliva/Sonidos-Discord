@@ -19,7 +19,10 @@ APP_NAME = "SonidosBot"
 CONFIG_FILENAME = "config.json"
 TOKEN_ENV_VAR = "SONIDOS_BOT_TOKEN"
 
-VALID_MODES = ("keyboard", "gamepad", "text_keyword", "voice_keyword")
+VALID_MODES = ("keyboard", "gamepad")
+# Claves de versiones anteriores (palabra clave por texto y por voz) que se ignoran al leer.
+LEGACY_MODES = ("text_keyword", "voice_keyword")
+AUDIO_EXTENSIONS = {".mp3", ".wav", ".ogg", ".m4a", ".flac", ".opus", ".webm"}
 
 
 class ConfigError(ValueError):
@@ -46,8 +49,8 @@ def default_config_path() -> Path:
 def normalize_text(text: str) -> str:
     """Minúsculas, sin tildes y con espacios simples.
 
-    Se usa tanto para nombres de sonidos como para palabras clave, así
-    "Chiqui  Tapía" y "chiqui tapia" se consideran iguales.
+    Se usa para los nombres de los sonidos, así "Chiqui  Tapía" y
+    "chiqui tapia" se consideran iguales.
     """
     decomposed = unicodedata.normalize("NFKD", text)
     without_accents = "".join(c for c in decomposed if not unicodedata.combining(c))
@@ -55,12 +58,16 @@ def normalize_text(text: str) -> str:
 
 
 def sound_key(filename: str) -> str:
-    """Clave única de un sonido a partir de su nombre de archivo.
+    """Clave única de un sonido a partir de su nombre de archivo o del panel de sonidos.
 
     Discord cambia los espacios por guiones bajos al subir adjuntos, así que
-    ``Chiqui Tapia.mp3`` y ``chiqui_tapia.mp3`` dan la misma clave.
+    ``Chiqui Tapia.mp3`` y ``chiqui_tapia.mp3`` dan la misma clave. Solo se
+    quita la extensión si es de audio, para que un nombre del panel de sonidos
+    como ``Sr. Tapia`` no pierda nada.
     """
-    stem = Path(filename).stem.replace("_", " ").replace("-", " ")
+    path = Path(filename)
+    stem = path.stem if path.suffix.lower() in AUDIO_EXTENSIONS else filename
+    stem = stem.replace("_", " ").replace("-", " ")
     return normalize_text(stem)
 
 
@@ -69,15 +76,13 @@ class DiscordSettings:
     token: str = ""
     guild_id: int = 0
     voice_channel_id: int = 0
-    sounds_channel_id: int = 0
+    sounds_channel_id: int = 0  # opcional: 0 = solo el panel de sonidos del servidor
 
 
 @dataclass
 class ModeSettings:
     keyboard: bool = True
     gamepad: bool = False
-    text_keyword: bool = True
-    voice_keyword: bool = False
 
     def enabled(self) -> list[str]:
         return [name for name in VALID_MODES if getattr(self, name)]
@@ -85,12 +90,11 @@ class ModeSettings:
 
 @dataclass
 class Binding:
-    """Asocia un sonido con lo que lo dispara en cada modo."""
+    """Asocia un sonido con su tecla y su botón del mando."""
 
     sound: str
     hotkey: str | None = None
     gamepad_button: int | None = None
-    keywords: list[str] = field(default_factory=list)
 
     @property
     def sound_key(self) -> str:
@@ -104,7 +108,6 @@ class Config:
     bindings: list[Binding] = field(default_factory=list)
     volume: float = 0.8
     cooldown_seconds: float = 2.0
-    voice_model_path: str = ""
     path: Path | None = field(default=None, repr=False, compare=False)
 
     @property
@@ -117,9 +120,11 @@ class Config:
         d = self.discord
         if not d.token:
             problems.append(f"Falta el token del bot (discord.token o variable {TOKEN_ENV_VAR}).")
-        for name in ("guild_id", "voice_channel_id", "sounds_channel_id"):
+        for name in ("guild_id", "voice_channel_id"):
             if getattr(d, name) <= 0:
                 problems.append(f"discord.{name} debe ser el ID numérico de Discord.")
+        if d.sounds_channel_id < 0:
+            problems.append("discord.sounds_channel_id debe ser el ID numérico de Discord o 0.")
 
         if not self.modes.enabled():
             problems.append("Hay que activar al menos un modo en 'modes'.")
@@ -127,18 +132,15 @@ class Config:
             problems.append("volume debe estar entre 0.0 y 2.0.")
         if self.cooldown_seconds < 0:
             problems.append("cooldown_seconds no puede ser negativo.")
-        if self.modes.voice_keyword and not self.voice_model_path:
-            problems.append("El modo voice_keyword necesita voice_model_path (modelo Vosk en español).")
 
         seen_hotkeys: dict[str, str] = {}
         seen_buttons: dict[int, str] = {}
-        seen_keywords: dict[str, str] = {}
         for b in self.bindings:
             if not b.sound.strip():
                 problems.append("Hay un binding sin nombre de sonido.")
                 continue
-            if b.hotkey is None and b.gamepad_button is None and not b.keywords:
-                problems.append(f"El sonido '{b.sound}' no tiene ninguna tecla, botón ni palabra clave.")
+            if b.hotkey is None and b.gamepad_button is None:
+                problems.append(f"El sonido '{b.sound}' no tiene ninguna tecla ni botón.")
             if b.hotkey:
                 key = b.hotkey.lower().replace(" ", "")
                 if key in seen_hotkeys:
@@ -152,13 +154,6 @@ class Config:
                         f"El botón {b.gamepad_button} está repetido en '{seen_buttons[b.gamepad_button]}' y '{b.sound}'."
                     )
                 seen_buttons[b.gamepad_button] = b.sound
-            for kw in b.keywords:
-                norm = normalize_text(kw)
-                if not norm:
-                    problems.append(f"El sonido '{b.sound}' tiene una palabra clave vacía.")
-                elif norm in seen_keywords and seen_keywords[norm] != b.sound:
-                    problems.append(f"La palabra clave '{kw}' está en '{seen_keywords[norm]}' y '{b.sound}'.")
-                seen_keywords[norm] = b.sound
 
         if problems:
             raise ConfigError(problems)
@@ -172,9 +167,9 @@ class Config:
 def _from_dict(data: dict) -> Config:
     try:
         discord = DiscordSettings(**data.get("discord", {}))
-        modes = ModeSettings(**data.get("modes", {}))
-        bindings = [Binding(**b) for b in data.get("bindings", [])]
-        extra = {k: data[k] for k in ("volume", "cooldown_seconds", "voice_model_path") if k in data}
+        modes = ModeSettings(**{k: v for k, v in data.get("modes", {}).items() if k not in LEGACY_MODES})
+        bindings = [Binding(**{k: v for k, v in b.items() if k != "keywords"}) for b in data.get("bindings", [])]
+        extra = {k: data[k] for k in ("volume", "cooldown_seconds") if k in data}
     except TypeError as exc:  # clave desconocida o tipo incorrecto
         raise ConfigError([f"Formato inesperado: {exc}"]) from exc
     return Config(discord=discord, modes=modes, bindings=bindings, **extra)

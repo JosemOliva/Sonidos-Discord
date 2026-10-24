@@ -8,7 +8,6 @@ from sonidos_bot.wizard_helpers import (
     describe_no_button,
     known_sounds,
     parse_discord_id,
-    parse_keywords,
     tk_event_to_hotkey,
 )
 
@@ -31,10 +30,6 @@ def test_tk_event_to_hotkey(keysym, state, expected):
     assert tk_event_to_hotkey(keysym, state) == expected
 
 
-def test_parse_keywords():
-    assert parse_keywords(" chiqui tapia, manda más ;uruguayo,, ") == ["chiqui tapia", "manda más", "uruguayo"]
-
-
 def test_parse_discord_id():
     assert parse_discord_id(" 123 ", "Servidor") == 123
     with pytest.raises(ConfigError, match="Servidor"):
@@ -42,10 +37,10 @@ def test_parse_discord_id():
 
 
 def test_binding_from_form():
-    b = binding_from_form(" uruguayo.mp3 ", "", "2", "uruguayo, charrúa")
-    assert (b.sound, b.hotkey, b.gamepad_button, b.keywords) == ("uruguayo.mp3", None, 2, ["uruguayo", "charrúa"])
+    b = binding_from_form(" uruguayo.mp3 ", "", "2")
+    assert (b.sound, b.hotkey, b.gamepad_button) == ("uruguayo.mp3", None, 2)
     with pytest.raises(ConfigError):
-        binding_from_form("x.mp3", "", "A", "")
+        binding_from_form("x.mp3", "", "A")
 
 
 def test_known_sounds(tmp_path):
@@ -80,3 +75,11 @@ def test_describe_no_button_con_mando():
     msg = describe_no_button([("Xbox 360 Controller", 11)])
     assert "Xbox 360 Controller (11 botones)" in msg
     assert "cruceta" in msg
+
+
+def test_soundboard_names():
+    from sonidos_bot.wizard_helpers import soundboard_names
+
+    data = {"items": [{"name": "El Manda Mas"}, {"name": "Angel"}, {"name": ""}, {"name": "Angel"}]}
+    assert soundboard_names(data) == ["Angel", "El Manda Mas"]
+    assert soundboard_names([]) == []

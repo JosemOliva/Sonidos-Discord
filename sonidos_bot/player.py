@@ -40,9 +40,8 @@ def find_ffmpeg() -> str:
 
 
 class Player:
-    def __init__(self, config: Config, voice_client_cls: type[discord.VoiceProtocol] | None = None):
+    def __init__(self, config: Config):
         self.config = config
-        self.voice_client_cls = voice_client_cls
         self.voice: discord.VoiceClient | None = None
         self._ffmpeg = find_ffmpeg()
         self._last_play = 0.0
@@ -58,10 +57,7 @@ class Player:
                 if self.voice.channel.id != channel.id:
                     await self.voice.move_to(channel)
                 return self.voice
-            kwargs = {"self_deaf": False, "reconnect": True}
-            if self.voice_client_cls is not None:
-                kwargs["cls"] = self.voice_client_cls
-            self.voice = await channel.connect(**kwargs)
+            self.voice = await channel.connect(self_deaf=True, reconnect=True)
             log.info("Conectado al canal de voz '%s'", channel.name)
             return self.voice
 

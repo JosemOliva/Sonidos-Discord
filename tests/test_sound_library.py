@@ -78,3 +78,30 @@ def test_add_from_message_replaces_sound(tmp_path):
     assert added == ["uruguayo"]
     assert lib.get("uruguayo").read_bytes() == b"v2"
     assert not (lib.cache_dir / "1.mp3").exists()
+
+
+class FakeSoundboardSound:
+    def __init__(self, id, name, data=b"panel"):
+        self.id = id
+        self.name = name
+        self.data = data
+        self.reads = 0
+
+    async def read(self):
+        self.reads += 1
+        return self.data
+
+
+def test_sync_uses_soundboard_and_channel_wins(tmp_path):
+    lib = make_library(tmp_path)
+    panel = [FakeSoundboardSound(10, "El Manda Mas"), FakeSoundboardSound(11, "Uruguayo", b"del panel")]
+    channel = FakeChannel([msg(FakeAttachment(1, "uruguayo.mp3", b"del canal"))])
+    asyncio.run(lib.sync(channel, panel))
+
+    assert lib.names() == ["el manda mas", "uruguayo"]
+    assert lib.get("el manda mas").read_bytes() == b"panel"
+    assert lib.get("uruguayo").read_bytes() == b"del canal"
+
+    asyncio.run(lib.sync(None, panel))  # sin canal: solo el panel
+    assert lib.get("uruguayo").read_bytes() == b"del panel"
+    assert panel[0].reads == 1  # no se volvió a descargar
