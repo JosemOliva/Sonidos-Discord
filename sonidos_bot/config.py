@@ -135,7 +135,8 @@ class Config:
         if self.cooldown_seconds < 0:
             problems.append("cooldown_seconds no puede ser negativo.")
         if self.modes.voice_keyword and not self.voice_model_path:
-            problems.append("El modo voice_keyword necesita voice_model_path (modelo Vosk en español).")
+            problems.append("Palabra por voz necesita el modelo Vosk en español: en Modos pulsa «Descargar modelo» "
+                            "o desactiva Palabra por voz (voice_model_path vacío).")
 
         seen_hotkeys: dict[str, str] = {}
         seen_buttons: dict[int, str] = {}
