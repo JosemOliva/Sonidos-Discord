@@ -1,8 +1,15 @@
-"""Lanzador usado por PyInstaller y para ejecutar sin instalar el paquete."""
+"""Lanzador de la app (``SonidosBot.exe``): el menú con el bot dentro."""
 
+import os
 import sys
 
-from sonidos_bot.__main__ import main
+# El .exe sin consola no tiene stdout/stderr; algunas librerías escriben ahí igual.
+if sys.stdout is None:
+    sys.stdout = open(os.devnull, "w")
+if sys.stderr is None:
+    sys.stderr = open(os.devnull, "w")
+
+from sonidos_bot.wizard import main  # noqa: E402
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main(sys.argv[1:])

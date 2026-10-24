@@ -179,24 +179,28 @@ def capture_gamepad_button(timeout: float = 10.0) -> int | None:
     from .triggers import xinput
     from .triggers.gamepad import buttons_down, init_pygame_joystick
 
-    pygame = init_pygame_joystick()
     deadline = time.monotonic() + timeout
-    sticks: list = []
-    try:
+    if xinput.connected_pads():
+        # Mando tipo Xbox: basta XInput, y así no se toca pygame mientras el bot lo usa en otro hilo.
         while time.monotonic() < deadline:
-            pygame.event.pump()
-            if pygame.joystick.get_count() != len(sticks):
-                sticks = [pygame.joystick.Joystick(i) for i in range(pygame.joystick.get_count())]
-            down = buttons_down(sticks)
+            down = xinput.pressed_buttons()
             if down:
                 return min(down)
             time.sleep(0.01)
-        found = [(s.get_name(), s.get_numbuttons()) for s in sticks]
-        if not found and xinput.connected_pads():
-            found = [("Mando XInput", len(xinput.BUTTON_BITS))]
-        raise RuntimeError(describe_no_button(found))
-    finally:
-        pygame.joystick.quit()
+        raise RuntimeError(describe_no_button([("Mando XInput", len(xinput.BUTTON_BITS))]))
+
+    # No se llama a pygame.joystick.quit(): el bot puede estar leyendo el mando en este mismo proceso.
+    pygame = init_pygame_joystick()
+    sticks: list = []
+    while time.monotonic() < deadline:
+        pygame.event.pump()
+        if pygame.joystick.get_count() != len(sticks):
+            sticks = [pygame.joystick.Joystick(i) for i in range(pygame.joystick.get_count())]
+        down = buttons_down(sticks)
+        if down:
+            return min(down)
+        time.sleep(0.01)
+    raise RuntimeError(describe_no_button([(s.get_name(), s.get_numbuttons()) for s in sticks]))
 
 
 def describe_no_button(sticks: list[tuple[str, int]]) -> str:
@@ -230,17 +234,17 @@ def download_vosk_model(dest_dir: Path | None = None, progress=None) -> Path:
     return target
 
 
-def bot_command() -> list[str]:
-    """Comando para lanzar el bot, empaquetado o desde el código fuente."""
-    if getattr(sys, "frozen", False):
-        exe = Path(sys.executable).with_name("SonidosBot.exe")
-        return [str(exe)]
-    return [sys.executable, "-m", "sonidos_bot"]
+def already_running(name: str = "SonidosBot") -> bool:
+    """True si ya hay otra ventana de la app abierta (solo Windows), para no tener dos bots."""
+    if sys.platform != "win32":
+        return False
+    import ctypes
 
-
-def launch_bot() -> None:
-    flags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
-    subprocess.Popen(bot_command(), creationflags=flags, close_fds=True)
+    kernel32 = ctypes.windll.kernel32
+    already_exists = 183  # ERROR_ALREADY_EXISTS
+    # El mutex se mantiene mientras viva el proceso; Windows lo libera al cerrar.
+    already_running.handle = kernel32.CreateMutexW(None, False, f"Local\\{name}")
+    return kernel32.GetLastError() == already_exists
 
 
 def run_in_thread(target, on_done) -> threading.Thread:
