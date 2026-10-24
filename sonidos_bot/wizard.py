@@ -85,6 +85,7 @@ MODES = [
 ]
 
 ASSETS = Path(__file__).resolve().parent / "assets"  # icono.ico (ventana) e icono.png (barra lateral)
+FONT_FAMILY = "Montserrat"  # va en assets/fuentes, así se ve igual en cualquier PC
 
 PAGES = [("conexion", "Conexión"), ("modos", "Modos"), ("sonidos", "Sonidos"), ("ajustes", "Ajustes"),
          ("registro", "Registro")]
@@ -111,6 +112,17 @@ def load_or_default() -> Config:
 
 
 # -- piezas reutilizables -----------------------------------------------------
+
+
+def load_app_font() -> None:
+    """Carga la fuente de la app solo para este proceso y la pone por defecto en todos los widgets.
+
+    Si no se puede cargar, se queda la fuente de customtkinter.
+    """
+    files = sorted((ASSETS / "fuentes").glob(f"{FONT_FAMILY}-*.ttf"))
+    if not files or not all(ctk.FontManager.load_font(str(f)) for f in files):
+        return
+    ctk.ThemeManager.theme["CTkFont"]["family"] = FONT_FAMILY
 
 
 def font(size: int = 13, bold: bool = False) -> ctk.CTkFont:
@@ -176,6 +188,7 @@ class WindowLogHandler(logging.Handler):
 class Wizard(ctk.CTk):
     def __init__(self, autostart: bool = False):
         ctk.set_appearance_mode("dark")
+        load_app_font()
         super().__init__(fg_color=BG)
         self.title("Sonidos Bot")
         self._set_window_icon()

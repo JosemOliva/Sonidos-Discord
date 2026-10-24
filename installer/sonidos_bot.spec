@@ -25,6 +25,8 @@ else:
 # Icono del programa; el mismo archivo va dentro para la ventana (wizard.py).
 icon = ROOT / "sonidos_bot" / "assets" / "icono.ico"
 datas += [(str(icon), "sonidos_bot/assets"), (str(icon.with_suffix(".png")), "sonidos_bot/assets")]
+# Fuente de la app (Montserrat), se carga al abrir la ventana.
+datas += [(str(f), "sonidos_bot/assets/fuentes") for f in (ROOT / "sonidos_bot" / "assets" / "fuentes").iterdir()]
 
 a = Analysis(
     [str(ROOT / "run.py")],
