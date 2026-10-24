@@ -1,7 +1,7 @@
 """Cliente de Discord que une configuración, biblioteca, reproductor y disparadores.
 
 Flujo:
-  1. Al conectarse, sincroniza la biblioteca desde el canal de sonidos.
+  1. Al conectarse, sincroniza la biblioteca (panel de sonidos y canal).
   2. Entra al canal de voz configurado (y vuelve a entrar si lo sacan).
   3. Arranca los disparadores de los modos activos.
   4. Cada disparo busca el sonido y lo reproduce.
@@ -9,12 +9,16 @@ Flujo:
 El config se vigila en disco: si se edita (a mano o desde el menú del
 instalador) se recarga sin reiniciar el bot, así se pueden añadir o cambiar
 palabras clave, teclas y sonidos en caliente.
+
+Al cerrar la ventana de la consola en Windows, el bot sale del canal de voz
+antes de terminar; si no, Discord lo deja dentro un buen rato.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 
 import discord
 from discord import app_commands
@@ -29,6 +33,7 @@ from .triggers.text_keyword import TextKeywordTrigger
 log = logging.getLogger("sonidos_bot.bot")
 
 CONFIG_POLL_SECONDS = 5
+CLOSE_TIMEOUT_SECONDS = 4  # Windows mata el proceso unos 5 s después de cerrar la consola
 REJOIN_DELAY_SECONDS = 5
 
 
@@ -53,15 +58,40 @@ class SoundBot(discord.Client):
         self.player = Player(config, voice_client_class(config))
         self.triggers: list[Trigger] = []
         self._ready_once = False
+        self._main_loop: asyncio.AbstractEventLoop | None = None
         self._config_mtime = self._read_config_mtime()
         self._register_commands()
 
     # -- arranque -----------------------------------------------------------
 
     def run(self) -> None:  # type: ignore[override]
+        if sys.platform == "win32":
+            self._install_console_close_handler()
         super().run(self.config.discord.token, log_handler=None)
 
+    def _install_console_close_handler(self) -> None:
+        """Al cerrar la consola (X, Ctrl+C, apagar la PC) sale del canal de voz antes de morir."""
+        import ctypes
+
+        handler_type = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_uint)
+
+        def on_console_event(event: int) -> bool:
+            loop = self._main_loop
+            if loop is None or not loop.is_running():
+                return False
+            log.info("Cerrando: salgo del canal de voz")
+            future = asyncio.run_coroutine_threadsafe(self.close(), loop)
+            try:
+                future.result(timeout=CLOSE_TIMEOUT_SECONDS)
+            except Exception as exc:  # cerramos igual
+                log.warning("No pude cerrar del todo: %s", exc)
+            return True
+
+        self._console_handler = handler_type(on_console_event)  # que no lo borre el recolector
+        ctypes.windll.kernel32.SetConsoleCtrlHandler(self._console_handler, True)
+
     async def setup_hook(self) -> None:
+        self._main_loop = asyncio.get_running_loop()
         guild = discord.Object(id=self.config.discord.guild_id)
         self.tree.copy_global_to(guild=guild)
         await self.tree.sync(guild=guild)
