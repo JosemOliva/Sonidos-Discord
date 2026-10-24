@@ -18,13 +18,13 @@ los guarda en caché local.
 
 ```
 bot-sonido-discord/
-├── run.py                   # lanzador del bot (SonidosBot.exe)
-├── configurar.py            # lanzador del menú (ConfigurarSonidosBot.exe)
+├── run.py                   # lanzador de la app (SonidosBot.exe)
 ├── config.example.json      # ejemplo de configuración
 ├── requirements.txt
 ├── sonidos_bot/
-│   ├── __main__.py          # CLI: python -m sonidos_bot [--config] [--check]
-│   ├── wizard.py            # menú de configuración (tema oscuro)       [paso 4 ✔]
+│   ├── __main__.py          # bot sin ventana: python -m sonidos_bot [--config] [--check]
+│   ├── wizard.py            # la app: menú (tema oscuro) con el bot dentro
+│   ├── runner.py            # arranca y detiene el bot en un hilo de la app
 │   ├── wizard_helpers.py    # lógica del menú sin ventanas              [paso 4 ✔]
 │   ├── config.py            # carga, validación y guardado del config   [paso 1 ✔]
 │   ├── bot.py               # cliente de Discord, comandos y recarga    [paso 2 ✔]
@@ -48,14 +48,17 @@ bot-sonido-discord/
 ## Instalación en una PC
 
 1. Ejecuta `SonidosBot-Setup-x.y.z.exe` (no pide permisos de administrador).
-2. Al terminar se abre **Configurar Sonidos Bot**: pega el token y los IDs,
-   marca los modos (teclado, mando, palabra por texto, palabra por voz), revisa
-   los sonidos y, si usas la voz, pulsa *Descargar modelo en español*.
+2. Al terminar se abre **Sonidos Bot**: pega el token y los IDs, marca los
+   modos (teclado, mando, palabra por texto, palabra por voz), revisa los
+   sonidos y, si usas la voz, descarga el modelo en español.
 3. Pulsa **Guardar e iniciar bot**.
 
-Para añadir o cambiar sonidos y palabras clave más adelante, vuelve a abrir
-*Configurar Sonidos Bot* desde el menú Inicio. Si el bot está abierto, aplica
-los cambios solo. La configuración se conserva al desinstalar o actualizar.
+Es un solo programa, sin ventana de consola: el bot corre dentro de la app y
+se detiene al cerrarla (sale antes del canal de voz). La sección *Registro*
+muestra lo que va haciendo. Si cambias sonidos o palabras clave con el bot en
+marcha, se aplican al guardar. Con la opción de inicio con Windows, la app se
+abre minimizada y arranca el bot sola. La configuración se conserva al
+desinstalar o actualizar.
 
 ## Generar el instalador
 

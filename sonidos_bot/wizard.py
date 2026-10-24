@@ -1,18 +1,26 @@
-"""Menú de configuración del bot (se abre al terminar la instalación).
+"""La app Sonidos Bot: menú de configuración con el bot dentro.
 
-Tema oscuro con los colores de Discord y una barra lateral con cuatro
+Tema oscuro con los colores de Discord y una barra lateral con estas
 secciones:
   Conexión: token e IDs del servidor y los canales.
   Modos:    teclado, mando, palabra clave por texto y por voz.
   Sonidos:  cada sonido con sus palabras clave, su tecla y su botón.
   Ajustes:  volumen, tiempo entre sonidos y carpeta de datos.
+  Registro: lo que va haciendo el bot.
 
-Se puede volver a abrir en cualquier momento para añadir o cambiar sonidos y
-palabras clave. Si el bot está abierto, aplica los cambios solo al guardar.
+El bot corre en un hilo de esta misma ventana (ver ``runner.py``): se inicia
+y se detiene con el botón de la barra lateral y se apaga al cerrar la
+ventana, saliendo antes del canal de voz. Al guardar con el bot en marcha,
+los cambios se aplican solos.
+
+Opciones: ``--iniciar`` arranca el bot al abrir y ``--minimizado`` abre la
+ventana minimizada (las usa el acceso directo de inicio con Windows).
 """
 
 from __future__ import annotations
 
+import argparse
+import logging
 import queue
 import tkinter as tk
 from tkinter import filedialog, messagebox
@@ -20,6 +28,7 @@ from tkinter import filedialog, messagebox
 import customtkinter as ctk
 
 from . import __version__
+from .__main__ import setup_logging
 from .config import (
     Binding,
     Config,
@@ -30,13 +39,13 @@ from .config import (
     save_config,
 )
 from .wizard_helpers import (
+    already_running,
     binding_from_form,
     capture_gamepad_button,
     download_vosk_model,
     fetch_soundboard_names,
     find_cached_sound,
     known_sounds,
-    launch_bot,
     open_folder,
     parse_discord_id,
     play_preview,
@@ -44,6 +53,7 @@ from .wizard_helpers import (
     run_in_thread,
     tk_event_to_hotkey,
 )
+from .runner import CONNECTED, ERROR, STARTING, STOPPED, BotRunner
 
 # Paleta de Discord (modo oscuro) con acentos naranja.
 BG = "#313338"
@@ -75,7 +85,16 @@ MODES = [
     ("voice_keyword", "🎙", "Palabra por voz", "Alguien dice la palabra clave en el canal de voz."),
 ]
 
-PAGES = [("conexion", "Conexión"), ("modos", "Modos"), ("sonidos", "Sonidos"), ("ajustes", "Ajustes")]
+PAGES = [("conexion", "Conexión"), ("modos", "Modos"), ("sonidos", "Sonidos"), ("ajustes", "Ajustes"),
+         ("registro", "Registro")]
+MAX_LOG_LINES = 1000
+
+BOT_STATES = {  # estado: (texto, color del punto, texto del botón)
+    STOPPED: ("Bot detenido", MUTED, "▶  Guardar e iniciar bot"),
+    STARTING: ("Conectando…", ACCENT, "■  Detener bot"),
+    CONNECTED: ("Bot conectado", "#23A55A", "■  Detener bot"),
+    ERROR: ("El bot se detuvo por un error", RED, "▶  Guardar e iniciar bot"),
+}
 
 
 def load_or_default() -> Config:
@@ -138,11 +157,26 @@ def page_header(parent, title: str, subtitle: str, wrap: int = 560) -> None:
 # -- ventana principal --------------------------------------------------------
 
 
+class WindowLogHandler(logging.Handler):
+    """Manda cada línea del log a la sección Registro (desde cualquier hilo)."""
+
+    def __init__(self, window: "Wizard"):
+        super().__init__(level=logging.INFO)
+        self.window = window
+        self.setFormatter(logging.Formatter("%(asctime)s  %(levelname)-7s %(message)s", "%H:%M:%S"))
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            self.window.call_in_ui(self.window._append_log, self.format(record))
+        except Exception:
+            self.handleError(record)
+
+
 class Wizard(ctk.CTk):
-    def __init__(self):
+    def __init__(self, autostart: bool = False):
         ctk.set_appearance_mode("dark")
         super().__init__(fg_color=BG)
-        self.title("Sonidos Bot - Configuración")
+        self.title("Sonidos Bot")
         self.geometry("920x620")
         self.minsize(860, 560)
         self.config_data = load_or_default()
@@ -156,12 +190,19 @@ class Wizard(ctk.CTk):
 
         self.pages: dict[str, ctk.CTkFrame] = {}
         builders = {"conexion": self._page_connection, "modos": self._page_modes,
-                    "sonidos": self._page_sounds, "ajustes": self._page_settings}
+                    "sonidos": self._page_sounds, "ajustes": self._page_settings,
+                    "registro": self._page_log}
         for name, _ in PAGES:
             frame = ctk.CTkFrame(self, fg_color=BG, corner_radius=0)
             builders[name](frame)
             self.pages[name] = frame
         self.show_page("sonidos" if self.config_data.discord.token else "conexion")
+
+        setup_logging(extra=[WindowLogHandler(self)])
+        self.runner = BotRunner(on_state=lambda state, detail: self.call_in_ui(self._bot_state_changed, state, detail))
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+        if autostart and self.config_data.discord.token:
+            self.after(300, lambda: self.save(start=True))
 
     # -- hilos --------------------------------------------------------------
 
@@ -186,7 +227,7 @@ class Wizard(ctk.CTk):
 
         ctk.CTkLabel(side, text="🔊 Sonidos Bot", font=font(20, bold=True), text_color=TEXT, anchor="w").grid(
             row=0, column=0, sticky="we", padx=20, pady=(24, 0))
-        ctk.CTkLabel(side, text=f"Configuración · v{__version__}", font=font(12), text_color=MUTED, anchor="w").grid(
+        ctk.CTkLabel(side, text=f"v{__version__}", font=font(12), text_color=MUTED, anchor="w").grid(
             row=1, column=0, sticky="we", padx=20, pady=(0, 20))
 
         self.nav: dict[str, ctk.CTkButton] = {}
@@ -202,8 +243,12 @@ class Wizard(ctk.CTk):
         self.status = ctk.CTkLabel(bottom, text="Sin cambios guardados", font=font(11), text_color=MUTED,
                                    wraplength=190, justify="left", anchor="w")
         self.status.pack(fill="x", pady=(0, 8))
+        self.bot_status = ctk.CTkLabel(bottom, text="●  Bot detenido", font=font(12, bold=True), text_color=MUTED,
+                                       anchor="w")
+        self.bot_status.pack(fill="x", pady=(0, 6))
         button(bottom, "Guardar", self.save, "accent").pack(fill="x", pady=3)
-        button(bottom, "▶  Guardar e iniciar bot", lambda: self.save(start=True), "green").pack(fill="x", pady=3)
+        self.bot_btn = button(bottom, "▶  Guardar e iniciar bot", self._toggle_bot, "green")
+        self.bot_btn.pack(fill="x", pady=3)
 
     def show_page(self, name: str) -> None:
         for page_name, frame in self.pages.items():
@@ -457,6 +502,55 @@ class Wizard(ctk.CTk):
             return
         open_folder(log.parent)
 
+    # -- Registro -----------------------------------------------------------
+
+    def _page_log(self, page) -> None:
+        page_header(page, "Registro", "Lo que va haciendo el bot. Si algo no funciona, mira aquí primero.")
+        self.log_box = ctk.CTkTextbox(page, fg_color=INPUT, text_color=TEXT, font=ctk.CTkFont(family="Consolas",
+                                      size=12), corner_radius=8, wrap="word")
+        self.log_box.pack(fill="both", expand=True, padx=28, pady=(0, 20))
+        self.log_box.configure(state="disabled")
+
+    def _append_log(self, line: str) -> None:
+        box = self.log_box
+        at_bottom = box.yview()[1] > 0.98
+        box.configure(state="normal")
+        box.insert("end", line + "\n")
+        lines = int(box.index("end-1c").split(".")[0])
+        if lines > MAX_LOG_LINES:
+            box.delete("1.0", f"{lines - MAX_LOG_LINES}.0")
+        box.configure(state="disabled")
+        if at_bottom:
+            box.see("end")
+
+    # -- bot ----------------------------------------------------------------
+
+    def _toggle_bot(self) -> None:
+        if self.runner.running:
+            self.bot_btn.configure(state="disabled", text="Deteniendo…")
+            run_in_thread(self.runner.stop, lambda *_: None)
+        else:
+            self.save(start=True)
+
+    def _bot_state_changed(self, state: str, detail: str) -> None:
+        text, color, button_text = BOT_STATES[state]
+        if state == CONNECTED and detail:
+            text = f"Conectado como {detail}"
+        self.bot_status.configure(text=f"●  {text}", text_color=color)
+        if self.bot_btn.cget("text") != "Cerrando…":
+            self.bot_btn.configure(state="normal", text=button_text)
+        if state == ERROR:
+            messagebox.showerror("El bot se detuvo", f"{detail}\n\nMás detalles en la sección Registro.")
+
+    def _on_close(self) -> None:
+        """Al cerrar la ventana, el bot sale del canal de voz y se apaga."""
+        if not self.runner.running:
+            self.destroy()
+            return
+        self.bot_btn.configure(state="disabled", text="Cerrando…")
+        self.status.configure(text="Saliendo del canal de voz…", text_color=MUTED)
+        run_in_thread(self.runner.stop, lambda *_: self.call_in_ui(self.destroy))
+
     # -- guardar ------------------------------------------------------------
 
     def build_config(self) -> Config:
@@ -504,14 +598,17 @@ class Wizard(ctk.CTk):
             messagebox.showerror("Revisa la configuración", "\n".join(f"• {p}" for p in exc.problems))
             return
         save_config(config, default_config_path())
+        config = load_config(default_config_path())  # con la ruta, para que el bot vigile el archivo
         self.status.configure(text="✓ Guardado", text_color=GREEN)
-        if start:
-            try:
-                launch_bot()
-            except OSError as exc:
-                messagebox.showerror("Error", f"No se pudo iniciar el bot:\n{exc}")
-                return
-            self.status.configure(text="✓ Guardado y bot iniciado.\nSi ya estaba abierto, aplica los cambios solo.")
+        if self.runner.running:
+            if self.runner.needs_restart(config):
+                self.status.configure(text="✓ Guardado. Reinicio el bot para usar el nuevo token o servidor.")
+                runner = self.runner
+                run_in_thread(lambda: (runner.stop(), runner.start(config)), lambda *_: None)
+            else:
+                self.status.configure(text="✓ Guardado. El bot aplica los cambios en unos segundos.")
+        elif start:
+            self.runner.start(config)
 
 
 # -- ventana de sonido ---------------------------------------------------------
@@ -651,8 +748,21 @@ class BindingDialog(ctk.CTkToplevel):
         self.destroy()
 
 
-def main() -> None:
-    Wizard().mainloop()
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(prog="SonidosBot", description="Bot de sonidos para Discord")
+    parser.add_argument("--iniciar", action="store_true", help="Inicia el bot al abrir")
+    parser.add_argument("--minimizado", action="store_true", help="Abre la ventana minimizada")
+    args = parser.parse_args(argv)
+    if already_running():
+        root = tk.Tk()
+        root.withdraw()
+        messagebox.showinfo("Sonidos Bot", "Sonidos Bot ya está abierto. Búscalo en la barra de tareas.")
+        root.destroy()
+        return
+    app = Wizard(autostart=args.iniciar)
+    if args.minimizado:
+        app.iconify()
+    app.mainloop()
 
 
 if __name__ == "__main__":

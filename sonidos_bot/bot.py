@@ -47,7 +47,7 @@ def voice_client_class(config: Config) -> type[discord.VoiceProtocol] | None:
 
 
 class SoundBot(discord.Client):
-    def __init__(self, config: Config):
+    def __init__(self, config: Config, on_connected=None):
         intents = discord.Intents.default()
         intents.message_content = True  # necesario para las palabras clave por texto
         intents.voice_states = True
@@ -58,6 +58,7 @@ class SoundBot(discord.Client):
         self.player = Player(config, voice_client_class(config))
         self.triggers: list[Trigger] = []
         self._ready_once = False
+        self._on_connected = on_connected  # lo usa la app para mostrar "Conectado"
         self._main_loop: asyncio.AbstractEventLoop | None = None
         self._config_mtime = self._read_config_mtime()
         self._register_commands()
@@ -106,6 +107,8 @@ class SoundBot(discord.Client):
         await self._join_voice()
         await self._start_triggers()
         self._watch_config.start()
+        if self._on_connected is not None:
+            self._on_connected(self)
 
     async def close(self) -> None:
         await self._stop_triggers()

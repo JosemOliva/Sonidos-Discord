@@ -83,4 +83,4 @@ class GamepadTrigger(Trigger):
                     self.fire(self._buttons[button])
             down_before = down
             self._stop.wait(POLL_SECONDS)
-        pygame.joystick.quit()
+        # Sin pygame.joystick.quit(): el menú comparte pygame en el mismo proceso.
