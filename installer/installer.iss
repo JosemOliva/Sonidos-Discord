@@ -22,8 +22,11 @@ Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
 ArchitecturesInstallIn64BitMode=x64compatible
-UninstallDisplayIcon={app}\SonidosBot.exe
+UninstallDisplayIcon={app}\icono.ico
 SetupIconFile=..\sonidos_bot\assets\icono.ico
+; Avisa a Windows que refresque los iconos: si no, el acceso directo de una
+; versión anterior puede seguir mostrando el icono viejo (el de Python).
+ChangesAssociations=yes
 
 [Languages]
 Name: "spanish"; MessagesFile: "compiler:Languages\Spanish.isl"
@@ -39,18 +42,22 @@ Type: files; Name: "{app}\ConfigurarSonidosBot.exe"
 Type: files; Name: "{group}\Configurar Sonidos Bot.lnk"
 Type: files; Name: "{autodesktop}\Configurar Sonidos Bot.lnk"
 Type: files; Name: "{userstartup}\Sonidos Bot.lnk"
+; Los accesos directos se recrean con el icono nuevo.
+Type: files; Name: "{autodesktop}\Sonidos Bot.lnk"
+Type: files; Name: "{group}\Sonidos Bot.lnk"
 
 [Files]
 Source: "..\dist\SonidosBot\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\sonidos_bot\assets\icono.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\Sonidos Bot"; Filename: "{app}\SonidosBot.exe"
+Name: "{group}\Sonidos Bot"; Filename: "{app}\SonidosBot.exe"; IconFilename: "{app}\icono.ico"
 Name: "{group}\Desinstalar Sonidos Bot"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\Sonidos Bot"; Filename: "{app}\SonidosBot.exe"; Tasks: desktopicon
-Name: "{userstartup}\Sonidos Bot"; Filename: "{app}\SonidosBot.exe"; Parameters: "--iniciar --minimizado"; Tasks: startup
+Name: "{autodesktop}\Sonidos Bot"; Filename: "{app}\SonidosBot.exe"; IconFilename: "{app}\icono.ico"; Tasks: desktopicon
+Name: "{userstartup}\Sonidos Bot"; Filename: "{app}\SonidosBot.exe"; IconFilename: "{app}\icono.ico"; Parameters: "--iniciar --minimizado"; Tasks: startup
 
 [Run]
-; Al terminar, abre la app para elegir modos, sonidos y palabras clave.
+; Al terminar, abre la app para elegir modos, sonidos, teclas y botones.
 Filename: "{app}\SonidosBot.exe"; Description: "Abrir Sonidos Bot ahora"; Flags: postinstall nowait skipifsilent
 
 [UninstallDelete]
