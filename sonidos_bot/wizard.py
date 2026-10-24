@@ -381,8 +381,10 @@ class Wizard(ctk.CTk):
     def _preview(self, b: Binding) -> None:
         path = find_cached_sound(self.config_data.cache_dir, b.sound)
         if path is None:
-            messagebox.showinfo("Probar", f"'{b.sound}' todavía no está descargado.\n"
-                                          "Inicia el bot una vez para que baje los audios del canal.")
+            messagebox.showinfo("Probar", f"No encuentro '{b.sound}' entre los sonidos descargados.\n\n"
+                                          "Pulsa Editar y elige un nombre del desplegable (los del panel de "
+                                          "sonidos del servidor). Si la lista está vacía, inicia el bot una vez "
+                                          "para que descargue los sonidos.")
             return
         try:
             play_preview(path, volume=self.volume.get() / 100)
