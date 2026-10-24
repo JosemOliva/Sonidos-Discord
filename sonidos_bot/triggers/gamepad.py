@@ -2,8 +2,9 @@
 
 Un hilo propio lee los mandos con ``pygame`` (sin abrir ventana). Funciona con
 cualquier mando que Windows reconozca y admite conectarlo o desconectarlo con
-el bot en marcha. Los números de botón empiezan en 0; el menú del instalador
-los detecta pulsando el botón.
+el bot en marcha. Los mandos tipo Xbox se leen además por XInput (ver
+``xinput.py``), por si pygame no los ve. Los números de botón empiezan en 0;
+el menú del instalador los detecta pulsando el botón.
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ from __future__ import annotations
 import os
 import threading
 
+from . import xinput
 from .base import Trigger
 
 POLL_SECONDS = 0.01
@@ -26,6 +28,18 @@ def init_pygame_joystick():
     pygame.display.init()
     pygame.joystick.init()
     return pygame
+
+
+def buttons_down(sticks) -> set[int]:
+    """Botones pulsados ahora en cualquier mando.
+
+    Manda XInput: un mando Xbox también puede aparecer en pygame con otra
+    numeración, y así el mismo botón siempre da el mismo número.
+    """
+    down = xinput.pressed_buttons()
+    if down:
+        return down
+    return {b for s in sticks for b in range(s.get_numbuttons()) if s.get_button(b)}
 
 
 class GamepadTrigger(Trigger):
@@ -56,21 +70,17 @@ class GamepadTrigger(Trigger):
     def _poll(self) -> None:
         pygame = init_pygame_joystick()
         sticks: list = []
-        pressed: dict[tuple[int, int], bool] = {}
+        down_before: set[int] = set()
         while not self._stop.is_set():
             pygame.event.pump()
             if pygame.joystick.get_count() != len(sticks):
                 sticks = [pygame.joystick.Joystick(i) for i in range(pygame.joystick.get_count())]
                 names = ", ".join(s.get_name() for s in sticks) or "ninguno"
-                self.log.info("Mandos detectados: %s", names)
-            for s in sticks:
-                jid = s.get_instance_id()
-                for button, key in self._buttons.items():
-                    if button >= s.get_numbuttons():
-                        continue
-                    down = bool(s.get_button(button))
-                    if down and not pressed.get((jid, button)):
-                        self.fire(key)
-                    pressed[(jid, button)] = down
+                self.log.info("Mandos detectados: %s (XInput: %d)", names, xinput.connected_pads())
+            down = buttons_down(sticks)
+            for button in down - down_before:
+                if button in self._buttons:
+                    self.fire(self._buttons[button])
+            down_before = down
             self._stop.wait(POLL_SECONDS)
-        pygame.joystick.quit()
+        # Sin pygame.joystick.quit(): el menú comparte pygame en el mismo proceso.

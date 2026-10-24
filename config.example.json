@@ -3,35 +3,29 @@
     "token": "PEGA_AQUI_EL_TOKEN_DEL_BOT",
     "guild_id": 123456789012345678,
     "voice_channel_id": 123456789012345678,
-    "sounds_channel_id": 123456789012345678
+    "sounds_channel_id": 0
   },
   "modes": {
     "keyboard": true,
-    "gamepad": false,
-    "text_keyword": true,
-    "voice_keyword": true
+    "gamepad": true
   },
   "bindings": [
     {
       "sound": "chiqui_tapia.mp3",
       "hotkey": "<ctrl>+<alt>+1",
-      "gamepad_button": 0,
-      "keywords": ["chiqui tapia"]
+      "gamepad_button": 0
     },
     {
       "sound": "manda_mas.mp3",
       "hotkey": "<ctrl>+<alt>+2",
-      "gamepad_button": 1,
-      "keywords": ["manda mas"]
+      "gamepad_button": 1
     },
     {
       "sound": "uruguayo.mp3",
       "hotkey": "<ctrl>+<alt>+3",
-      "gamepad_button": 2,
-      "keywords": ["uruguayo"]
+      "gamepad_button": 2
     }
   ],
   "volume": 0.8,
-  "cooldown_seconds": 2,
-  "voice_model_path": "C:\\SonidosBot\\vosk-model-small-es-0.42"
+  "cooldown_seconds": 2
 }

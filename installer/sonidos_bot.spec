@@ -1,7 +1,5 @@
-# Empaquetado con PyInstaller: genera dist/SonidosBot/ con dos programas que
-# comparten librerías:
-#   SonidosBot.exe          el bot (ventana de consola con el log)
-#   ConfigurarSonidosBot.exe  el menú de configuración
+# Empaquetado con PyInstaller: genera dist/SonidosBot/SonidosBot.exe, una sola
+# app sin consola (el menú de configuración con el bot dentro).
 # Uso (desde la raíz del proyecto):  pyinstaller installer/sonidos_bot.spec
 from pathlib import Path
 
@@ -10,12 +8,12 @@ from PyInstaller.utils.hooks import collect_all, collect_submodules
 ROOT = Path(SPECPATH).parent
 
 datas, binaries, hiddenimports = [], [], []
-for package in ("discord", "davey", "vosk", "pygame"):
+# customtkinter trae temas y fuentes como archivos de datos.
+for package in ("discord", "davey", "pygame", "customtkinter"):
     d, b, h = collect_all(package)
     datas += d
     binaries += b
     hiddenimports += h
-hiddenimports += collect_submodules("discord.ext.voice_recv")
 hiddenimports += collect_submodules("pynput")
 
 ffmpeg = ROOT / "installer" / "vendor" / "ffmpeg.exe"
@@ -24,45 +22,25 @@ if ffmpeg.exists():
 else:
     print("AVISO: falta installer/vendor/ffmpeg.exe, el bot necesitará ffmpeg en el PATH")
 
-icon = ROOT / "installer" / "icono.ico"
-icon = str(icon) if icon.exists() else None
+# Icono del programa; el mismo archivo va dentro para la ventana (wizard.py).
+icon = ROOT / "sonidos_bot" / "assets" / "icono.ico"
+datas += [(str(icon), "sonidos_bot/assets"), (str(icon.with_suffix(".png")), "sonidos_bot/assets")]
+# Fuente de la app (Montserrat), se carga al abrir la ventana.
+datas += [(str(f), "sonidos_bot/assets/fuentes") for f in (ROOT / "sonidos_bot" / "assets" / "fuentes").iterdir()]
 
-bot_a = Analysis(
+a = Analysis(
     [str(ROOT / "run.py")],
     pathex=[str(ROOT)],
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
 )
-# El menú usa customtkinter, que trae temas y fuentes como archivos de datos.
-cfg_datas, cfg_binaries, cfg_hidden = collect_all("customtkinter")
-cfg_a = Analysis(
-    [str(ROOT / "configurar.py")],
-    pathex=[str(ROOT)],
-    binaries=cfg_binaries,
-    datas=cfg_datas,
-    hiddenimports=cfg_hidden + collect_submodules("pygame"),
-)
-
-bot_exe = EXE(
-    PYZ(bot_a.pure),
-    bot_a.scripts,
+exe = EXE(
+    PYZ(a.pure),
+    a.scripts,
     exclude_binaries=True,
     name="SonidosBot",
-    console=True,
-    icon=icon,
-)
-cfg_exe = EXE(
-    PYZ(cfg_a.pure),
-    cfg_a.scripts,
-    exclude_binaries=True,
-    name="ConfigurarSonidosBot",
     console=False,
-    icon=icon,
+    icon=str(icon),
 )
-
-COLLECT(
-    bot_exe, bot_a.binaries, bot_a.datas,
-    cfg_exe, cfg_a.binaries, cfg_a.datas,
-    name="SonidosBot",
-)
+COLLECT(exe, a.binaries, a.datas, name="SonidosBot")

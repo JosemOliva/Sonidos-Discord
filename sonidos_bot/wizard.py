@@ -1,25 +1,36 @@
-"""Menú de configuración del bot (se abre al terminar la instalación).
+"""La app Sonidos Bot: menú de configuración con el bot dentro.
 
-Tema oscuro con los colores de Discord y una barra lateral con cuatro
+Tema oscuro con los colores de Discord y una barra lateral con estas
 secciones:
   Conexión: token e IDs del servidor y los canales.
-  Modos:    teclado, mando, palabra clave por texto y por voz.
-  Sonidos:  cada sonido con sus palabras clave, su tecla y su botón.
+  Modos:    teclado y mando.
+  Sonidos:  cada sonido con su tecla y su botón del mando.
   Ajustes:  volumen, tiempo entre sonidos y carpeta de datos.
+  Registro: lo que va haciendo el bot.
 
-Se puede volver a abrir en cualquier momento para añadir o cambiar sonidos y
-palabras clave. Si el bot está abierto, aplica los cambios solo al guardar.
+El bot corre en un hilo de esta misma ventana (ver ``runner.py``): se inicia
+y se detiene con el botón de la barra lateral y se apaga al cerrar la
+ventana, saliendo antes del canal de voz. Al guardar con el bot en marcha,
+los cambios se aplican solos.
+
+Opciones: ``--iniciar`` arranca el bot al abrir y ``--minimizado`` abre la
+ventana minimizada (las usa el acceso directo de inicio con Windows).
 """
 
 from __future__ import annotations
 
+import argparse
+import logging
 import queue
+import sys
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from pathlib import Path
+from tkinter import messagebox
 
 import customtkinter as ctk
 
 from . import __version__
+from .__main__ import setup_logging
 from .config import (
     Binding,
     Config,
@@ -30,12 +41,12 @@ from .config import (
     save_config,
 )
 from .wizard_helpers import (
+    already_running,
     binding_from_form,
     capture_gamepad_button,
-    download_vosk_model,
+    fetch_soundboard_names,
     find_cached_sound,
     known_sounds,
-    launch_bot,
     open_folder,
     parse_discord_id,
     play_preview,
@@ -43,6 +54,7 @@ from .wizard_helpers import (
     run_in_thread,
     tk_event_to_hotkey,
 )
+from .runner import CONNECTED, ERROR, STARTING, STOPPED, BotRunner
 
 # Paleta de Discord (modo oscuro) con acentos naranja.
 BG = "#313338"
@@ -62,19 +74,29 @@ GRAY_BTN = "#4E5058"
 GRAY_HOVER = "#6D6F78"
 
 DEFAULT_BINDINGS = [
-    Binding(sound="chiqui_tapia.mp3", hotkey="<ctrl>+<alt>+1", gamepad_button=0, keywords=["chiqui tapia"]),
-    Binding(sound="manda_mas.mp3", hotkey="<ctrl>+<alt>+2", gamepad_button=1, keywords=["manda mas"]),
-    Binding(sound="uruguayo.mp3", hotkey="<ctrl>+<alt>+3", gamepad_button=2, keywords=["uruguayo"]),
+    Binding(sound="chiqui_tapia.mp3", hotkey="<ctrl>+<alt>+1", gamepad_button=0),
+    Binding(sound="manda_mas.mp3", hotkey="<ctrl>+<alt>+2", gamepad_button=1),
+    Binding(sound="uruguayo.mp3", hotkey="<ctrl>+<alt>+3", gamepad_button=2),
 ]
 
 MODES = [
     ("keyboard", "⌨", "Teclado", "Un atajo en esta PC reproduce el sonido, incluso dentro de un juego."),
     ("gamepad", "🎮", "Mando", "Un botón del mando conectado a esta PC reproduce el sonido."),
-    ("text_keyword", "💬", "Palabra por texto", "Alguien escribe la palabra clave en el chat del servidor."),
-    ("voice_keyword", "🎙", "Palabra por voz", "Alguien dice la palabra clave en el canal de voz."),
 ]
 
-PAGES = [("conexion", "Conexión"), ("modos", "Modos"), ("sonidos", "Sonidos"), ("ajustes", "Ajustes")]
+ASSETS = Path(__file__).resolve().parent / "assets"  # icono.ico (ventana) e icono.png (barra lateral)
+FONT_FAMILY = "Montserrat"  # va en assets/fuentes, así se ve igual en cualquier PC
+
+PAGES = [("conexion", "Conexión"), ("modos", "Modos"), ("sonidos", "Sonidos"), ("ajustes", "Ajustes"),
+         ("registro", "Registro")]
+MAX_LOG_LINES = 1000
+
+BOT_STATES = {  # estado: (texto, color del punto, texto del botón)
+    STOPPED: ("Bot detenido", MUTED, "▶  Guardar e iniciar bot"),
+    STARTING: ("Conectando…", ACCENT, "■  Detener bot"),
+    CONNECTED: ("Bot conectado", "#23A55A", "■  Detener bot"),
+    ERROR: ("El bot se detuvo por un error", RED, "▶  Guardar e iniciar bot"),
+}
 
 
 def load_or_default() -> Config:
@@ -82,7 +104,7 @@ def load_or_default() -> Config:
         return load_config(validate=False)
     except FileNotFoundError:
         config = Config(bindings=[Binding(**vars(b)) for b in DEFAULT_BINDINGS])
-        config.modes.voice_keyword = True
+        config.modes.gamepad = True
         return config
     except ConfigError as exc:
         messagebox.showwarning("Config dañado", f"No se pudo leer el config, empiezo de cero.\n\n{exc}")
@@ -90,6 +112,17 @@ def load_or_default() -> Config:
 
 
 # -- piezas reutilizables -----------------------------------------------------
+
+
+def load_app_font() -> None:
+    """Carga la fuente de la app solo para este proceso y la pone por defecto en todos los widgets.
+
+    Si no se puede cargar, se queda la fuente de customtkinter.
+    """
+    files = sorted((ASSETS / "fuentes").glob(f"{FONT_FAMILY}-*.ttf"))
+    if not files or not all(ctk.FontManager.load_font(str(f)) for f in files):
+        return
+    ctk.ThemeManager.theme["CTkFont"]["family"] = FONT_FAMILY
 
 
 def font(size: int = 13, bold: bool = False) -> ctk.CTkFont:
@@ -137,11 +170,28 @@ def page_header(parent, title: str, subtitle: str, wrap: int = 560) -> None:
 # -- ventana principal --------------------------------------------------------
 
 
+class WindowLogHandler(logging.Handler):
+    """Manda cada línea del log a la sección Registro (desde cualquier hilo)."""
+
+    def __init__(self, window: "Wizard"):
+        super().__init__(level=logging.INFO)
+        self.window = window
+        self.setFormatter(logging.Formatter("%(asctime)s  %(levelname)-7s %(message)s", "%H:%M:%S"))
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            self.window.call_in_ui(self.window._append_log, self.format(record))
+        except Exception:
+            self.handleError(record)
+
+
 class Wizard(ctk.CTk):
-    def __init__(self):
+    def __init__(self, autostart: bool = False):
         ctk.set_appearance_mode("dark")
+        load_app_font()
         super().__init__(fg_color=BG)
-        self.title("Sonidos Bot - Configuración")
+        self.title("Sonidos Bot")
+        self._set_window_icon()
         self.geometry("920x620")
         self.minsize(860, 560)
         self.config_data = load_or_default()
@@ -155,12 +205,26 @@ class Wizard(ctk.CTk):
 
         self.pages: dict[str, ctk.CTkFrame] = {}
         builders = {"conexion": self._page_connection, "modos": self._page_modes,
-                    "sonidos": self._page_sounds, "ajustes": self._page_settings}
+                    "sonidos": self._page_sounds, "ajustes": self._page_settings,
+                    "registro": self._page_log}
         for name, _ in PAGES:
             frame = ctk.CTkFrame(self, fg_color=BG, corner_radius=0)
             builders[name](frame)
             self.pages[name] = frame
         self.show_page("sonidos" if self.config_data.discord.token else "conexion")
+
+        setup_logging(extra=[WindowLogHandler(self)])
+        self.runner = BotRunner(on_state=lambda state, detail: self.call_in_ui(self._bot_state_changed, state, detail))
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+        if autostart and self.config_data.discord.token:
+            self.after(300, lambda: self.save(start=True))
+
+    def _set_window_icon(self) -> None:
+        icon = ASSETS / "icono.ico"
+        if sys.platform != "win32" or not icon.exists():
+            return
+        # customtkinter pone su propio icono a los 200 ms; se aplica el nuestro después.
+        self.after(250, lambda: self.iconbitmap(str(icon)))
 
     # -- hilos --------------------------------------------------------------
 
@@ -183,9 +247,15 @@ class Wizard(ctk.CTk):
         side.grid_columnconfigure(0, weight=1)
         side.grid_rowconfigure(len(PAGES) + 2, weight=1)
 
-        ctk.CTkLabel(side, text="🔊 Sonidos Bot", font=font(20, bold=True), text_color=TEXT, anchor="w").grid(
+        logo = None
+        if (ASSETS / "icono.png").exists():
+            from PIL import Image
+
+            logo = ctk.CTkImage(Image.open(ASSETS / "icono.png"), size=(28, 28))
+        ctk.CTkLabel(side, text="  Sonidos Bot" if logo else "Sonidos Bot", image=logo, compound="left",
+                     font=font(20, bold=True), text_color=TEXT, anchor="w").grid(
             row=0, column=0, sticky="we", padx=20, pady=(24, 0))
-        ctk.CTkLabel(side, text=f"Configuración · v{__version__}", font=font(12), text_color=MUTED, anchor="w").grid(
+        ctk.CTkLabel(side, text=f"v{__version__}", font=font(12), text_color=MUTED, anchor="w").grid(
             row=1, column=0, sticky="we", padx=20, pady=(0, 20))
 
         self.nav: dict[str, ctk.CTkButton] = {}
@@ -201,8 +271,12 @@ class Wizard(ctk.CTk):
         self.status = ctk.CTkLabel(bottom, text="Sin cambios guardados", font=font(11), text_color=MUTED,
                                    wraplength=190, justify="left", anchor="w")
         self.status.pack(fill="x", pady=(0, 8))
+        self.bot_status = ctk.CTkLabel(bottom, text="●  Bot detenido", font=font(12, bold=True), text_color=MUTED,
+                                       anchor="w")
+        self.bot_status.pack(fill="x", pady=(0, 6))
         button(bottom, "Guardar", self.save, "accent").pack(fill="x", pady=3)
-        button(bottom, "▶  Guardar e iniciar bot", lambda: self.save(start=True), "green").pack(fill="x", pady=3)
+        self.bot_btn = button(bottom, "▶  Guardar e iniciar bot", self._toggle_bot, "green")
+        self.bot_btn.pack(fill="x", pady=3)
 
     def show_page(self, name: str) -> None:
         for page_name, frame in self.pages.items():
@@ -235,7 +309,7 @@ class Wizard(ctk.CTk):
 
         self.ids: dict[str, tk.StringVar] = {}
         labels = [("guild_id", "ID del servidor"), ("voice_channel_id", "ID del canal de voz"),
-                  ("sounds_channel_id", "ID del canal con los audios")]
+                  ("sounds_channel_id", "ID del canal con los audios (opcional)")]
         for row, (name, label) in enumerate(labels, start=1):
             value = getattr(d, name)
             self.ids[name] = tk.StringVar(value=str(value) if value else "")
@@ -251,7 +325,9 @@ class Wizard(ctk.CTk):
             text=("¿Dónde encuentro esto?\n"
                   "•  Token: discord.com/developers → tu aplicación → Bot → Reset Token.\n"
                   "•  IDs: en Discord, Ajustes → Avanzado → Modo desarrollador. "
-                  "Luego clic derecho en el servidor o canal → Copiar ID."),
+                  "Luego clic derecho en el servidor o canal → Copiar ID.\n"
+                  "•  Canal con los audios: déjalo vacío para usar solo el panel de sonidos del servidor. "
+                  "Rellénalo si además quieres usar archivos subidos a un canal."),
         ).pack(fill="x", padx=18, pady=14)
 
     # -- Modos --------------------------------------------------------------
@@ -278,58 +354,17 @@ class Wizard(ctk.CTk):
             ctk.CTkSwitch(box, text="", variable=self.modes[name], width=46, progress_color=GREEN,
                           command=self._on_modes_changed).grid(row=0, column=2, rowspan=2, padx=16)
 
-        voice = card(page)
-        voice.pack(fill="x", padx=28, pady=(7, 0))
-        voice.grid_columnconfigure(0, weight=1)
-        field_label(voice, "Modelo de voz en español (para 'Palabra por voz')").grid(
-            row=0, column=0, columnspan=2, sticky="we", padx=18, pady=(16, 4))
-        self.model_path = tk.StringVar(value=self.config_data.voice_model_path)
-        self.model_entry = entry(voice, self.model_path, placeholder_text="Carpeta del modelo Vosk")
-        self.model_entry.grid(row=1, column=0, sticky="we", padx=(18, 8))
-        self.browse_btn = button(voice, "Examinar…", self._browse_model, "gray", width=110)
-        self.browse_btn.grid(row=1, column=1, padx=(0, 18))
-        self.download_btn = button(voice, "⬇  Descargar modelo (~40 MB)", self._download_model, "accent")
-        self.download_btn.grid(row=2, column=0, sticky="w", padx=18, pady=(10, 16))
-        self.download_progress = ctk.CTkProgressBar(voice, progress_color=ACCENT, fg_color=INPUT, width=160)
-        self.download_progress.set(0)
-        self.download_progress.grid(row=2, column=1, padx=(0, 18), pady=(10, 16))
-        self._update_voice_box()
 
     def _on_modes_changed(self) -> None:
-        self._update_voice_box()
         self._refresh_sounds()
-
-    def _update_voice_box(self) -> None:
-        state = "normal" if self.modes["voice_keyword"].get() else "disabled"
-        for widget in (self.model_entry, self.browse_btn, self.download_btn):
-            widget.configure(state=state)
-
-    def _browse_model(self) -> None:
-        folder = filedialog.askdirectory(title="Carpeta del modelo Vosk")
-        if folder:
-            self.model_path.set(folder)
-
-    def _download_model(self) -> None:
-        self.download_btn.configure(state="disabled", text="Descargando…")
-        progress = lambda fraction: self.call_in_ui(self.download_progress.set, fraction)
-        done = lambda path, error: self.call_in_ui(self._download_finished, path, error)
-        run_in_thread(lambda: download_vosk_model(progress=progress), done)
-
-    def _download_finished(self, path, error) -> None:
-        self.download_btn.configure(state="normal", text="⬇  Descargar modelo (~40 MB)")
-        if error:
-            messagebox.showerror("Error", f"No se pudo descargar el modelo:\n{error}")
-            return
-        self.download_progress.set(1)
-        self.model_path.set(str(path))
 
     # -- Sonidos ------------------------------------------------------------
 
     def _page_sounds(self, page) -> None:
         top = ctk.CTkFrame(page, fg_color="transparent")
         top.pack(fill="x")
-        page_header(top, "Sonidos", "Cada sonido es un archivo del canal de audios. "
-                                    "Las palabras clave sirven igual para texto y para voz.", wrap=440)
+        page_header(top, "Sonidos", "Cada sonido sale del panel de sonidos del servidor o del canal de audios "
+                                    "y se dispara con su tecla o su botón del mando.", wrap=440)
         button(top, "+  Añadir sonido", self._add_binding, "accent").place(relx=1.0, x=-28, y=28, anchor="ne")
         self.sound_list = ctk.CTkScrollableFrame(page, fg_color="transparent")
         self.sound_list.pack(fill="both", expand=True, padx=20, pady=(0, 16))
@@ -360,8 +395,6 @@ class Wizard(ctk.CTk):
         chips = ctk.CTkFrame(box, fg_color="transparent")
         chips.grid(row=2, column=0, sticky="w", padx=14, pady=(8, 14))
         items = []
-        if modes.get("text_keyword", True) or modes.get("voice_keyword", True):
-            items += [f"💬 {k}" for k in b.keywords]
         if modes.get("keyboard", True) and b.hotkey:
             items.append(f"⌨ {pretty_hotkey(b.hotkey)}")
         if modes.get("gamepad", True) and b.gamepad_button is not None:
@@ -378,8 +411,10 @@ class Wizard(ctk.CTk):
     def _preview(self, b: Binding) -> None:
         path = find_cached_sound(self.config_data.cache_dir, b.sound)
         if path is None:
-            messagebox.showinfo("Probar", f"'{b.sound}' todavía no está descargado.\n"
-                                          "Inicia el bot una vez para que baje los audios del canal.")
+            messagebox.showinfo("Probar", f"No encuentro '{b.sound}' entre los sonidos descargados.\n\n"
+                                          "Pulsa Editar y elige un nombre del desplegable (los del panel de "
+                                          "sonidos del servidor). Si la lista está vacía, inicia el bot una vez "
+                                          "para que descargue los sonidos.")
             return
         try:
             play_preview(path, volume=self.volume.get() / 100)
@@ -447,6 +482,55 @@ class Wizard(ctk.CTk):
             return
         open_folder(log.parent)
 
+    # -- Registro -----------------------------------------------------------
+
+    def _page_log(self, page) -> None:
+        page_header(page, "Registro", "Lo que va haciendo el bot. Si algo no funciona, mira aquí primero.")
+        self.log_box = ctk.CTkTextbox(page, fg_color=INPUT, text_color=TEXT, font=ctk.CTkFont(family="Consolas",
+                                      size=12), corner_radius=8, wrap="word")
+        self.log_box.pack(fill="both", expand=True, padx=28, pady=(0, 20))
+        self.log_box.configure(state="disabled")
+
+    def _append_log(self, line: str) -> None:
+        box = self.log_box
+        at_bottom = box.yview()[1] > 0.98
+        box.configure(state="normal")
+        box.insert("end", line + "\n")
+        lines = int(box.index("end-1c").split(".")[0])
+        if lines > MAX_LOG_LINES:
+            box.delete("1.0", f"{lines - MAX_LOG_LINES}.0")
+        box.configure(state="disabled")
+        if at_bottom:
+            box.see("end")
+
+    # -- bot ----------------------------------------------------------------
+
+    def _toggle_bot(self) -> None:
+        if self.runner.running:
+            self.bot_btn.configure(state="disabled", text="Deteniendo…")
+            run_in_thread(self.runner.stop, lambda *_: None)
+        else:
+            self.save(start=True)
+
+    def _bot_state_changed(self, state: str, detail: str) -> None:
+        text, color, button_text = BOT_STATES[state]
+        if state == CONNECTED and detail:
+            text = f"Conectado como {detail}"
+        self.bot_status.configure(text=f"●  {text}", text_color=color)
+        if self.bot_btn.cget("text") != "Cerrando…":
+            self.bot_btn.configure(state="normal", text=button_text)
+        if state == ERROR:
+            messagebox.showerror("El bot se detuvo", f"{detail}\n\nMás detalles en la sección Registro.")
+
+    def _on_close(self) -> None:
+        """Al cerrar la ventana, el bot sale del canal de voz y se apaga."""
+        if not self.runner.running:
+            self.destroy()
+            return
+        self.bot_btn.configure(state="disabled", text="Cerrando…")
+        self.status.configure(text="Saliendo del canal de voz…", text_color=MUTED)
+        run_in_thread(self.runner.stop, lambda *_: self.call_in_ui(self.destroy))
+
     # -- guardar ------------------------------------------------------------
 
     def build_config(self) -> Config:
@@ -454,6 +538,9 @@ class Wizard(ctk.CTk):
         ids = {}
         labels = {"guild_id": "Servidor", "voice_channel_id": "Canal de voz", "sounds_channel_id": "Canal de audios"}
         for name, var in self.ids.items():
+            if name == "sounds_channel_id" and not var.get().strip():
+                ids[name] = 0  # opcional
+                continue
             try:
                 ids[name] = parse_discord_id(var.get(), labels[name])
             except ConfigError as exc:
@@ -462,8 +549,7 @@ class Wizard(ctk.CTk):
         id_errors = bool(problems)
 
         config = Config(bindings=list(self.bindings), volume=self.volume.get() / 100,
-                        cooldown_seconds=round(float(self.cooldown.get()), 1),
-                        voice_model_path=self.model_path.get().strip())
+                        cooldown_seconds=round(float(self.cooldown.get()), 1))
         config.discord.token = self.token.get().strip()
         for name, value in ids.items():
             setattr(config.discord, name, value)
@@ -485,14 +571,17 @@ class Wizard(ctk.CTk):
             messagebox.showerror("Revisa la configuración", "\n".join(f"• {p}" for p in exc.problems))
             return
         save_config(config, default_config_path())
+        config = load_config(default_config_path())  # con la ruta, para que el bot vigile el archivo
         self.status.configure(text="✓ Guardado", text_color=GREEN)
-        if start:
-            try:
-                launch_bot()
-            except OSError as exc:
-                messagebox.showerror("Error", f"No se pudo iniciar el bot:\n{exc}")
-                return
-            self.status.configure(text="✓ Guardado y bot iniciado.\nSi ya estaba abierto, aplica los cambios solo.")
+        if self.runner.running:
+            if self.runner.needs_restart(config):
+                self.status.configure(text="✓ Guardado. Reinicio el bot para usar el nuevo token o servidor.")
+                runner = self.runner
+                run_in_thread(lambda: (runner.stop(), runner.start(config)), lambda *_: None)
+            else:
+                self.status.configure(text="✓ Guardado. El bot aplica los cambios en unos segundos.")
+        elif start:
+            self.runner.start(config)
 
 
 # -- ventana de sonido ---------------------------------------------------------
@@ -518,19 +607,14 @@ class BindingDialog(ctk.CTkToplevel):
         body.pack(fill="x", padx=24)
         body.grid_columnconfigure(0, weight=1)
 
-        field_label(body, "Archivo del sonido (en el canal de audios)").grid(
+        field_label(body, "Sonido (nombre en el panel de sonidos o archivo del canal)").grid(
             row=0, column=0, columnspan=3, sticky="we", padx=18, pady=(16, 4))
         self.sound = ctk.CTkComboBox(body, values=known_sounds(parent.config_data.cache_dir) or [""], height=36,
                                      fg_color=INPUT, border_width=0, button_color=CHIP, text_color=TEXT,
                                      dropdown_fg_color=INPUT, width=420)
         self.sound.set(b.sound)
         self.sound.grid(row=1, column=0, columnspan=3, sticky="we", padx=18)
-
-        field_label(body, "Palabras clave · texto y voz (separadas por comas)").grid(
-            row=2, column=0, columnspan=3, sticky="we", padx=18, pady=(14, 4))
-        self.keywords = tk.StringVar(value=", ".join(b.keywords))
-        entry(body, self.keywords, placeholder_text="chiqui tapia, chiqui").grid(
-            row=3, column=0, columnspan=3, sticky="we", padx=18)
+        self._load_soundboard_names()
 
         field_label(body, "Tecla").grid(row=4, column=0, columnspan=3, sticky="we", padx=18, pady=(14, 4))
         self.hotkey_label = chip(body, "")
@@ -585,6 +669,21 @@ class BindingDialog(ctk.CTkToplevel):
         self.bind("<KeyPress>", on_key)
         self.focus_set()
 
+    def _load_soundboard_names(self) -> None:
+        """Añade al desplegable los sonidos del panel del servidor, sin bloquear la ventana."""
+        token = self.parent.token.get().strip()
+        guild = self.parent.ids["guild_id"].get().strip()
+        if not token or not guild.isdigit():
+            return
+        done = lambda names, error: self.parent.call_in_ui(self._soundboard_names_loaded, names, error)
+        run_in_thread(lambda: fetch_soundboard_names(token, int(guild)), done)
+
+    def _soundboard_names_loaded(self, names, error) -> None:
+        if error or not names or not self.winfo_exists():
+            return  # sin conexión o sin panel: queda lo que ya había en caché
+        current = [v for v in self.sound.cget("values") if v]
+        self.sound.configure(values=sorted(set(current) | set(names)))
+
     def _capture_button(self) -> None:
         self.button_label.configure(text="  Pulsa un botón del mando…  ")
         self.button_btn.configure(state="disabled")
@@ -597,7 +696,7 @@ class BindingDialog(ctk.CTkToplevel):
         self.button_btn.configure(state="normal")
         if error or value is None:
             self._set_button(self.button_value)
-            messagebox.showwarning("Mando", f"No se detectó ningún botón.\n{error or 'Conecta el mando y vuelve a probar.'}",
+            messagebox.showwarning("Mando", f"No se detectó ningún botón.\n\n{error or 'Conecta el mando y vuelve a probar.'}",
                                    parent=self)
             return
         self._set_button(value)
@@ -609,15 +708,28 @@ class BindingDialog(ctk.CTkToplevel):
             return
         button_text = "" if self.button_value is None else str(self.button_value)
         try:
-            self.result = binding_from_form(sound, self.hotkey_value or "", button_text, self.keywords.get())
+            self.result = binding_from_form(sound, self.hotkey_value or "", button_text)
         except ConfigError as exc:
             messagebox.showerror("Error", "\n".join(exc.problems), parent=self)
             return
         self.destroy()
 
 
-def main() -> None:
-    Wizard().mainloop()
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(prog="SonidosBot", description="Bot de sonidos para Discord")
+    parser.add_argument("--iniciar", action="store_true", help="Inicia el bot al abrir")
+    parser.add_argument("--minimizado", action="store_true", help="Abre la ventana minimizada")
+    args = parser.parse_args(argv)
+    if already_running():
+        root = tk.Tk()
+        root.withdraw()
+        messagebox.showinfo("Sonidos Bot", "Sonidos Bot ya está abierto. Búscalo en la barra de tareas.")
+        root.destroy()
+        return
+    app = Wizard(autostart=args.iniciar)
+    if args.minimizado:
+        app.iconify()
+    app.mainloop()
 
 
 if __name__ == "__main__":
